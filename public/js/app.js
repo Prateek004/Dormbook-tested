@@ -1943,16 +1943,29 @@ async function showBill(residentId, opts = {}) {
     : `<tr><td colspan="${hasGst ? 6 : 3}" class="empty-row">Nothing billed yet</td></tr>`;
   const g = b.guest;
   const owes = b.balance > 0, adv = b.balance < 0;
-  openModal(`${b.title} · ${b.bill_no}`, `
+   const billNoVal = b.bill_no;
+  openModal(`${b.title} · ${billNoVal}`, `
     ${opts.justCheckedOut ? `<div class="done-banner no-print">✅ ${h(g.name)} is checked out. Print the bill or send it on WhatsApp. You can open it again any time from Guests → Left.</div>` : ''}
-    ${(b.company.missing || []).length && can('settings') ? `<div class="warn-banner no-print">Your ${b.company.missing.join(', ')} ${b.company.missing.length > 1 ? 'are' : 'is'} missing on bills.
-      <a href="#" onclick="event.preventDefault();closeModal();navigate('settings')">Add in Business &amp; GST</a></div>` : ''}
+    ${(b.company.missing || []).length && can('settings') ? `<div class="warn-banner no-print">Your ${b.company.missing.join(', ')} ${b.company.missing.length > 1 ? 'are' : 'is'} missing on bills.\n      <a href="#" onclick="event.preventDefault();closeModal();navigate('settings')">Add in Business &amp; GST</a></div>` : ''}
     <div class="btn-group no-print mb-12">
       <button class="btn btn-primary" onclick="printBill()">🖨 Print / Save PDF</button>
       <button class="btn btn-whatsapp" id="bill-wa" onclick="sendBillWhatsApp('${h(residentId)}')">🟢 Send on WhatsApp</button>
     </div>
+    <div class="field-row no-print mb-12" style="align-items:center;gap:12px">
+      <div class="field" style="margin:0;flex:0 0 auto">
+        <label for="bill-no-edit" style="font-size:12px;color:var(--muted)">Bill No.</label>
+        <input id="bill-no-edit" value="${h(billNoVal)}" style="width:140px;font-size:14px" maxlength="40" />
+      </div>
+      <div class="td-small" style="color:var(--muted)">
+        ${b.company.property_name || b.company.business_name ? `<b>${h(b.company.property_name || b.company.business_name)}</b>` : ''}
+        ${b.company.address ? ` · ${h(b.company.address)}` : ''}
+        ${b.company.phone ? ` · Ph: ${h(b.company.phone)}` : ''}
+        ${b.company.contact_email || b.company.email ? ` · ${h(b.company.contact_email || b.company.email)}` : ''}
+        ${b.company.gstin ? ` · GSTIN: ${h(b.company.gstin)}` : ''}
+      </div>
+    </div>
     <article class="report-doc bill-doc" id="bill-doc">
-      ${letterhead(b.company, b.title, `No. ${h(b.bill_no)} · ${fmtDate(b.date)}`, { dormFirst: true })}
+      ${letterhead(b.company, b.title, `No. <span id="bill-no-display">${h(billNoVal)}</span> · ${fmtDate(b.date)}`, { dormFirst: true })}
       <div class="bill-to">
         <div><div class="td-small">Bill to</div><b>${h(g.name)}</b><div>${h(g.mobile)}</div>${g.address ? `<div class="td-small">${h(g.address)}</div>` : ''}</div>
         <div><div class="td-small">Stay</div><b>Bed ${h(g.bed)}</b><div>${fmtDate(g.check_in)} → ${fmtDate(g.check_out)}</div>
