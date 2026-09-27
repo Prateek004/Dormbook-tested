@@ -1788,9 +1788,13 @@ async function renderReports(el, forced) {
   const list = forced ? all.filter(r => r.id === forced) : all.filter(r => r.id !== 'gst');
   if (!list.length) { el.innerHTML = '<div class="empty-state"><p>You don\'t have access to this report.</p></div>'; return; }
   STATE.reps = STATE.reps || {};
-  const st = STATE.reps[page] || (STATE.reps[page] = { id: list[0].id, from: todayIST().slice(0, 8) + '01', to: todayIST() });
+  const st = STATE.reps[page] || (STATE.reps[page] = { id: list[0].id, from: todayIST().slice(0, 8) + '01', to: todayIST(), activeTab: 'data' });
   if (!list.find(r => r.id === st.id)) st.id = list[0].id;
   const cur = list.find(r => r.id === st.id);
+  // Initialize report-specific options state
+  STATE.repOpts = STATE.repOpts || {};
+  const opts = STATE.repOpts[page] = STATE.repOpts[page] || { showZeroRows: false };
+  const activeTab = st.activeTab || 'data';
   el.innerHTML = `
     <div class="report-bar no-print">
       ${forced ? '' : `<div class="field"><label for="rp-type">Report</label>
@@ -1803,7 +1807,25 @@ async function renderReports(el, forced) {
         <button class="btn btn-outline btn-sm" onclick="setReportRange('${page}','last')">Last month</button>
       </div>
     </div>
+    <div class="sub-tabs no-print" role="tablist" style="margin-bottom:12px">
+      <button role="tab" class="sub-tab ${activeTab === 'data' ? 'active' : ''}" onclick="window._rpTab('data')">📊 Data</button>
+      <button role="tab" class="sub-tab ${activeTab === 'options' ? 'active' : ''}" onclick="window._rpTab('options')">⚙️ Options</button>
+    </div>
+    <div id="rp-options-panel" ${activeTab === 'options' ? '' : 'hidden'} class="card mb-12 no-print">
+      <strong>Display options</strong>
+      <label class="switch-row mt-12"><input type="checkbox" id="rp-opt-zerows" ${opts.showZeroRows ? 'checked' : ''} onchange="window._rpOptChange()" />
+        <span><strong>Show zero-value rows</strong><br/><span class="td-small">Include rows where all money columns are zero.</span></span></label>
+    </div>
     <div id="rp-doc"><div class="loading-spinner" style="margin:40px auto"></div></div>`;
+  window._rpTab = (tab) => {
+    st.activeTab = tab;
+    document.querySelectorAll('.sub-tab').forEach(b => b.classList.toggle('active', b.textContent.trim() === (tab === 'data' ? '📊 Data' : '⚙️ Options')));
+    const panel = document.getElementById('rp-options-panel');
+    if (panel) panel.hidden = (tab !== 'options');
+  };
+  window._rpOptChange = () => {
+    opts.showZeroRows = document.getElementById('rp-opt-zerows')?.checked || false;
+  };
   const reload = () => {
     if (!forced) st.id = document.getElementById('rp-type').value;
     st.from = document.getElementById('rp-from').value; st.to = document.getElementById('rp-to').value;
@@ -2392,6 +2414,9 @@ async function submitSettings() {
       booking_lock_hours: int('ps-lock'),
       refund_approval_threshold_paise: int('ps-refund') * 100,
       cash_reconciliation_tolerance_paise: int('ps-cash') * 100,
+      feature_beds: document.getElementById('ps-toggle-beds')?.checked !== false,
+      feature_gst: document.getElementById('ps-toggle-gst')?.checked !== false,
+      feature_user_access: document.getElementById('ps-toggle-useraccess')?.checked !== false,
     });
     await getProfile(true).catch(() => {});
     toast('Settings saved', 'success');
