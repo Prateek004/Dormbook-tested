@@ -1,0 +1,50 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main # Runs automatically when you push to main
+  workflow_dispatch: # Allows you to trigger the build manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # Install Capacitor locally to wrap the web app into a native container
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "Dormbook" "com.dormbook.app" --web-dir public
+
+      # Generate the Android project structure
+      - name: Add Android Platform
+        run: npx cap add android
+
+      # Compile the Android source code into an APK
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      # Upload the finished APK so you can download it
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dormbook-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
