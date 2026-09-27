@@ -135,8 +135,8 @@ function renderBill(b) {
     ${b.payments.length ? `<h4 style="margin:16px 0 4px">Payments</h4><table><tbody>${b.payments.map((p) =>
       `<tr><td>${fmtD(p.date)}</td><td>${esc(p.what)}</td><td>${esc(p.mode)}</td><td class="num">${inr(p.amount)}</td></tr>`).join('')}</tbody></table>` : ''}
     ${payBox}
-    <div class="foot">This is a computer-generated ${esc(b.title.toLowerCase())}.</div>
-  </article>`);
+    <div class="foot">This is a computer-generated ${esc(b.title.toLowerCase())} · DormBook — a product of A&amp;P Infotech Solution</div>
+    </article>`);
 }
 
 function notFound(res) {
