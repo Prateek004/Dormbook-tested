@@ -96,4 +96,47 @@ function resetOwnerPassword(req, res) {
   res.json({ ok: true, message: `Password reset for ${owner.name}` });
 }
 
-module.exports = { adminStats, listAccounts, getAccount, suspendAccount, activateAccount, resetOwnerPassword };
+/**
+ * DELETE /api/v1/admin/accounts/:id
+ * Super-admin permanently deletes an account and all its data.
+ */
+function deleteAccount(req, res) {
+  const db = getDb();
+  const account = db.prepare('SELECT id, business_name FROM accounts WHERE id = ?').get(req.params.id);
+  if (!account) return res.status(404).json({ error: 'Account not found' });
+
+  // Delete in dependency order to avoid FK constraint errors
+  const propertyIds = db.prepare('SELECT id FROM properties WHERE account_id = ?').all(req.params.id).map(p => p.id);
+  const placeholders = propertyIds.map(() => '?').join(',');
+
+  if (propertyIds.length) {
+    const residentIds = db.prepare(`SELECT id FROM residents WHERE property_id IN (${placeholders})`).all(...propertyIds).map(r => r.id);
+    const resPlaceholders = residentIds.length ? residentIds.map(() => '?').join(',') : "'__none__'";
+    if (residentIds.length) {
+      db.prepare(`DELETE FROM ledger_entries WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM payment_ledger WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM receipts WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM addon_charges WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM bill_links WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM documents WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM tenant_feedback WHERE resident_id IN (${resPlaceholders})`).run(...residentIds);
+      db.prepare(`DELETE FROM residents WHERE id IN (${resPlaceholders})`).run(...residentIds);
+    }
+    db.prepare(`DELETE FROM beds WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM expenses WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM cash_reconciliations WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM booking_requests WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM catalog_items WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM notification_log WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM audit_log WHERE property_id IN (${placeholders})`).run(...propertyIds);
+    db.prepare(`DELETE FROM properties WHERE account_id = ?`).run(req.params.id);
+  }
+
+  db.prepare('DELETE FROM users WHERE account_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
+
+  console.log(`[SUPERADMIN] Account deleted: ${account.id} (${account.business_name}) by ${req.user.id}`);
+  res.json({ ok: true, message: `Account "${account.business_name}" permanently deleted.` });
+}
+
+module.exports = { adminStats, listAccounts, getAccount, suspendAccount, activateAccount, resetOwnerPassword, deleteAccount };
