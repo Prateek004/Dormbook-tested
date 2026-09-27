@@ -2739,10 +2739,11 @@ async function renderAdminPanel(el) {
                 <td>${fmtDate(a.trial_ends_at)}</td>
                 <td>${a.properties}</td>
                 <td>${a.residents}</td>
-                <td>
+                  <td>
                   ${a.plan !== 'active' ? `<button class="btn btn-success btn-sm" onclick="adminActivate('${a.id}')">Activate</button>` : ''}
                   ${a.plan !== 'suspended' ? `<button class="btn btn-danger btn-sm" onclick="adminSuspend('${a.id}')">Suspend</button>` : ''}
                   <button class="btn btn-outline btn-sm" onclick="adminResetPassword('${a.id}','${esc(a.owner_name || '')}')">Reset password</button>
+                  <button class="btn btn-danger btn-sm" onclick="adminDeleteUser('${a.id}','${esc(a.owner_name || '')}','${esc(a.business_name || '')}')">🗑 Delete</button>
                 </td>
               </tr>
             `).join('')}
