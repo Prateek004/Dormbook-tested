@@ -17,28 +17,26 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup Java JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android Licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install Capacitor Dependencies
+      - name: Accept Android SDK Licenses
         run: |
-          npm install
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Install Project Dependencies
+        run: |
+          npm ci || npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "Dormbook" "com.dormbook.app" --web-dir public || true
 
-      - name: Sync Capacitor Android Project
+      - name: Initialize & Sync Capacitor
         run: |
+          npx cap init "Dormbook" "com.dormbook.app" --web-dir public || true
           if [ ! -d "android" ]; then
             npx cap add android
           fi
@@ -48,7 +46,7 @@ jobs:
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
