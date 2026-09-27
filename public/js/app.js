@@ -1994,6 +1994,15 @@ async function showBill(residentId, opts = {}) {
       </article>`, { wide: true });
 }
 
+// Sync the editable bill number field into the displayed bill header
+(function () {
+  const inp = document.getElementById('bill-no-edit');
+  const disp = document.getElementById('bill-no-display');
+  if (inp && disp) {
+    inp.addEventListener('input', () => { disp.textContent = inp.value || '—'; });
+  }
+})();
+
 function printBill() {
   document.body.classList.add('printing-bill');
   const done = () => { document.body.classList.remove('printing-bill'); window.removeEventListener('afterprint', done); };
