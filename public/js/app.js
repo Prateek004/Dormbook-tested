@@ -1977,8 +1977,8 @@ async function showBill(residentId, opts = {}) {
       ${b.payments.length ? `<div class="section-title">Payments</div>
         <table class="report-table compact"><tbody>${b.payments.map(p => `<tr><td>${fmtDate(p.date)}</td><td>${h(p.what)}</td><td>${h(p.mode)}</td><td class="num">${rupees(p.amount)}</td></tr>`).join('')}</tbody></table>` : ''}
       ${payBlock(b.pay, b.balance, b.company)}
-      <footer class="rep-foot">This is a computer-generated ${b.title.toLowerCase()} · DormBook</footer>
-    </article>`, { wide: true });
+      <footer class=\"rep-foot\">This is a computer-generated ${b.title.toLowerCase()} · DormBook — a product of A&amp;P Infotech Solution</footer>
+      </article>`, { wide: true });
 }
 
 function printBill() {
