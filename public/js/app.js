@@ -2220,7 +2220,35 @@ async function renderSettings(el) {
   const st = await api('GET', '/properties/settings');
   const rs = (p) => ((p || 0) / 100);
   const rateOpts = (sel) => GST_RATES.map(r => `<option value="${r * 100}" ${r * 100 === sel ? 'selected' : ''}>${r}%</option>`).join('');
+  STATE.settingsTab = STATE.settingsTab || 'business';
+  const activeTab = STATE.settingsTab;
+
+  // Tab renderer — called on tab switch without a full page reload
+  window._renderSettingsTab = (tab) => {
+    STATE.settingsTab = tab;
+    document.querySelectorAll('.settings-tab-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === tab)
+    );
+    const panel = document.getElementById('settings-tab-panel');
+    if (!panel) return;
+
+    if (tab === 'business') {
+      panel.innerHTML = businessTabHtml(st, rateOpts);
+    } else if (tab === 'toggles') {
+      panel.innerHTML = togglesTabHtml(st);
+    }
+  };
+
   el.innerHTML = `
+    <div class="sub-tabs no-print" role="tablist" style="margin-bottom:16px">
+      <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'business' ? 'active' : ''}" data-tab="business" onclick="window._renderSettingsTab('business')">🏢 Business & GST</button>
+      <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'toggles' ? 'active' : ''}" data-tab="toggles" onclick="window._renderSettingsTab('toggles')">⚙️ Feature Toggles</button>
+    </div>
+    <div id="settings-tab-panel"></div>
+  `;
+
+  function businessTabHtml(st, rateOpts) {
+    return `
     <div class="card mb-20">
       <strong>Your business</strong>
       <p class="td-small mt-4">Printed at the top of reports and bills.</p>
