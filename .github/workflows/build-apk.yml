@@ -3,8 +3,8 @@ name: Build Android APK
 on:
   push:
     branches:
-      - main # Runs automatically when you push to main
-  workflow_dispatch: # Allows you to trigger the build manually
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,30 +19,37 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup Java
+      - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      # Install Capacitor locally to wrap the web app into a native container
-      - name: Install Capacitor
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install Capacitor Dependencies
         run: |
+          npm install
           npm install @capacitor/core @capacitor/cli @capacitor/android
-          npx cap init "Dormbook" "com.dormbook.app" --web-dir public
+          npx cap init "Dormbook" "com.dormbook.app" --web-dir public || true
 
-      # Generate the Android project structure
-      - name: Add Android Platform
-        run: npx cap add android
+      - name: Sync Capacitor Android Project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
 
-      # Compile the Android source code into an APK
-      - name: Build APK
+      - name: Build Debug APK
         run: |
           cd android
           chmod +x ./gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
-      # Upload the finished APK so you can download it
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
