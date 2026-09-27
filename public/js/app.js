@@ -2310,8 +2310,40 @@ async function renderSettings(el) {
         <div class="field-note">If cash is short or extra by more than this, staff must write why.</div>
       </div>
     </details>
-    <div id="ps-error" class="error-msg hidden"></div>
+        <div id="ps-error" class="error-msg hidden"></div>
     <button class="btn btn-primary" id="ps-save" onclick="submitSettings()">Save settings</button>`;
+  }
+
+  function togglesTabHtml(st) {
+    return `
+    <div class="card mb-20">
+      <strong>Feature Toggles</strong>
+      <p class="td-small mt-4">Turn sections of DormBook on or off for this property.</p>
+
+      <label class="switch-row mt-12">
+        <input type="checkbox" id="ps-toggle-beds" ${st.feature_beds !== false ? 'checked' : ''} />
+        <span><strong>Beds</strong><br/><span class="td-small">Show the Beds section in the menu.</span></span>
+      </label>
+
+      <label class="switch-row mt-8">
+        <input type="checkbox" id="ps-toggle-gst" ${st.feature_gst !== false ? 'checked' : ''} />
+        <span><strong>GST &amp; Business</strong><br/><span class="td-small">Show GST Report and Business &amp; GST settings.</span></span>
+      </label>
+
+      <label class="switch-row mt-8">
+        <input type="checkbox" id="ps-toggle-useraccess" ${st.feature_user_access !== false ? 'checked' : ''} />
+        <span><strong>User Access</strong><br/><span class="td-small">Show the Users &amp; Access section in the menu.</span></span>
+      </label>
+
+      <div class="mt-16">
+        <button class="btn btn-primary" onclick="submitToggles()">Save toggles</button>
+      </div>
+      <div id="tgl-msg" class="td-small mt-8" style="color:var(--success,green)"></div>
+    </div>`;
+  }
+
+  // Render the active tab on load
+  window._renderSettingsTab(activeTab);
 }
 
 async function submitSettings() {
@@ -2343,6 +2375,25 @@ async function submitSettings() {
     toast('Settings saved', 'success');
     renderPage('settings');
   } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+}
+
+// ── Staff ─────────────────────────────────────────────────────
+async function submitToggles() {
+  const msg = document.getElementById('tgl-msg');
+  if (msg) msg.textContent = '';
+  try {
+    await api('PATCH', '/properties/settings', {
+      feature_beds:         document.getElementById('ps-toggle-beds')?.checked ?? true,
+      feature_gst:          document.getElementById('ps-toggle-gst')?.checked ?? true,
+      feature_user_access:  document.getElementById('ps-toggle-useraccess')?.checked ?? true,
+    });
+    await getProfile(true).catch(() => {});
+    if (msg) msg.textContent = '✅ Toggles saved.';
+    toast('Feature toggles saved', 'success');
+  } catch (ex) {
+    if (msg) msg.textContent = '';
+    toast(ex.message, 'error');
+  }
 }
 
 // ── Staff ─────────────────────────────────────────────────────
