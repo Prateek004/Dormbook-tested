@@ -2818,16 +2818,23 @@ function setToken(token) {
 }
 
 // ── Bill: send on WhatsApp + pay block (UPI QR, bank) ───────────
+// ── Bill: send on WhatsApp + pay block (UPI QR, bank) ───────────
 async function sendBillWhatsApp(residentId) {
   const btn = document.getElementById('bill-wa');
   if (btn) btn.disabled = true;
-  // Open the tab first (phones block pop-ups opened after a wait), then point it to WhatsApp.
-  const win = window.open('', '_blank');
   try {
     const r = await api('POST', `/residents/${residentId}/bill-link`);
-    if (win) { win.opener = null; win.location.href = r.whatsapp_url; } else location.href = r.whatsapp_url;
+    // Direct background navigation — no popup, no new tab, modal stays open.
+    const a = document.createElement('a');
+    a.href = r.whatsapp_url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
     if (!r.mobile) toast('This guest has no valid mobile number — pick the chat in WhatsApp', 'warning', 6000);
-  } catch (ex) { if (win) win.close(); toast(ex.message, 'error'); }
+    else toast('Opening WhatsApp…', 'success', 2500);
+  } catch (ex) { toast(ex.message, 'error'); }
   if (btn) btn.disabled = false;
 }
 function payBlock(pay, balance, c = {}) {
