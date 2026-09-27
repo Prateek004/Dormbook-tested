@@ -48,8 +48,8 @@ router.get  ('/admin/accounts',               authenticate, requireSuperAdmin, a
 router.get  ('/admin/accounts/:id',           authenticate, requireSuperAdmin, admin.getAccount);
 router.patch('/admin/accounts/:id/suspend',   authenticate, requireSuperAdmin, admin.suspendAccount);
 router.patch('/admin/accounts/:id/activate',  authenticate, requireSuperAdmin, admin.activateAccount);
-router.post ('/admin/accounts/:id/reset-password', authenticate, requireSuperAdmin, admin.resetOwnerPassword);
-
+router.post  ('/admin/accounts/:id/reset-password', authenticate, requireSuperAdmin, admin.resetOwnerPassword);
+router.delete('/admin/accounts/:id',                authenticate, requireSuperAdmin, admin.deleteAccount);
 // ── Dashboard ─────────────────────────────────────────────
 router.get('/dashboard/summary', authenticate, sameProperty, finance.getDashboard);
 
