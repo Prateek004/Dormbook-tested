@@ -2789,6 +2789,30 @@ async function adminSuspend(id) {
 }
 
 // ── Staff login code (first sign-in / forgot MPIN) ─────────────
+function adminDeleteUser(id, name, business) {
+  openModal(`Delete user: ${name}`, `
+    <div class="warn-banner">⚠️ This permanently deletes the owner account <b>${h(name)}</b> (${h(business)}) and all their data. This cannot be undone.</div>
+    <div class="field mt-12"><label for="adel-confirm">Type <b>DELETE</b> to confirm</label><input id="adel-confirm" placeholder="DELETE" autocomplete="off" /></div>
+    <div id="adel-error" class="error-msg hidden"></div>
+    <div class="btn-group mt-12">
+      <button class="btn btn-danger" onclick="submitAdminDelete('${h(id)}')">Permanently delete</button>
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+
+async function submitAdminDelete(id) {
+  const err = document.getElementById('adel-error'); err.classList.add('hidden');
+  if (document.getElementById('adel-confirm')?.value !== 'DELETE') {
+    err.textContent = 'Type DELETE in capitals to confirm.'; err.classList.remove('hidden'); return;
+  }
+  try {
+    await api('DELETE', `/admin/accounts/${id}`);
+    toast('Account and all data permanently deleted', 'warning', 5000);
+    closeModal(); renderPage('admin');
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+
+// ── Staff login code (first sign-in / forgot MPIN) ─────────────
 function showLoginCode(c, justAdded) {
   const site = location.origin;
   const msg = `Hello ${c.name}, your DormBook login code is ${c.code}.\nOpen ${site} → "Staff: first time / forgot MPIN" → type your mobile and this code, then set your own MPIN.\nThe code works once and ends in 24 hours. Do not share it.`;
