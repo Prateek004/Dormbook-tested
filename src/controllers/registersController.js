@@ -31,7 +31,7 @@ function company(db, propertyId) {
     gstin: p.gstin || '',
   };
   // What is still empty in Business & GST (shown to staff above a bill, never printed).
-  out.missing = [!p.address && 'address', !out.phone && 'phone', p.gst_enabled && !p.gstin && 'GSTIN'].filter(Boolean);
+  out.missing = [!p.address && 'address', !out.phone && 'phone', !out.email && 'email', p.gst_enabled && !p.gstin && 'GSTIN'].filter(Boolean);
   return out;
 }
 
