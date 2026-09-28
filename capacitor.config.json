@@ -2,10 +2,10 @@
   "appId": "com.apinfotech.dormbook",
   "appName": "DormBook",
   "webDir": "public",
-  "bundledWebRuntime": false,
   "server": {
     "androidScheme": "https",
-    "url": "https://REPLACE-WITH-YOUR-DEPLOYED-URL.up.railway.app",
-    "cleartext": false
+    "url": "https://dormbook-tested-production.up.railway.app",
+    "cleartext": false,
+    "errorPath": "offline.html"
   }
 }
