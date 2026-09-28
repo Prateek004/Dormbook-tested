@@ -89,7 +89,9 @@ function login(req, res) {
 
   const digits = identifier.replace(/\D/g, '');
   const asMobile = /^[\d\s+()-]+$/.test(identifier) ? (digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits) : identifier;
-  const user = db.prepare('SELECT * FROM users WHERE (email = ? OR mobile = ?) AND is_active = 1').get(identifier, asMobile);
+  // Emails match without caring about capital letters (staff emails may have
+  // been saved as typed, e.g. "Ravi@Gmail.com").
+  const user = db.prepare('SELECT * FROM users WHERE (lower(email) = ? OR mobile = ?) AND is_active = 1').get(identifier, asMobile);
 
   if (user && user.locked_until && user.locked_until > new Date().toISOString()) {
     return res.status(429).json({ error: `Too many wrong tries. Try again in ${minutesLeft(user.locked_until)} minutes.` });
@@ -100,6 +102,11 @@ function login(req, res) {
   const hashToCheck = user ? (isMpin ? user.mpin_hash : user.password_hash) : DUMMY_HASH;
   let valid = false;
   try { valid = bcrypt.compareSync(secret, hashToCheck); } catch (_) { valid = false; }
+  // A phone keyboard may add a space before/after the password. If the exact
+  // text fails, try once without those outer spaces.
+  if (!valid && user && !isMpin && secret.trim() !== secret && secret.trim().length >= 8) {
+    try { valid = bcrypt.compareSync(secret.trim(), user.password_hash); } catch (_) { valid = false; }
+  }
 
   if (!user || !valid) {
     if (user) {
@@ -303,6 +310,4 @@ function me(req, res) {
 }
 
 module.exports = {
-  login, register, forgotPassword, resetPassword, changePassword, me,
-  makeToken, publicUser, accountBlock,
-};
+  login, register, forgotPassword,
