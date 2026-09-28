@@ -87,7 +87,7 @@ function activateAccount(req, res) {
 function resetOwnerPassword(req, res) {
   const bcrypt = require('bcryptjs');
   const db = getDb();
-  const pwd = req.body.new_password == null ? '' : String(req.body.new_password);
+  res.json({ ok: true, message: `Password reset for ${owner.name}` });
   if (pwd.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
   const owner = db.prepare("SELECT id, name FROM users WHERE account_id = ? AND role = 'owner' ORDER BY created_at LIMIT 1").get(req.params.id);
   if (!owner) return res.status(404).json({ error: 'Owner not found for this account' });
