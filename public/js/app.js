@@ -3092,3 +3092,33 @@ async function submitChangeMpin() {
 
 // ── Boot ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
+
+// ── Android app (Capacitor) hardware back button ─────────────
+// Only runs inside the DormBook Android app; a normal browser has no
+// window.Capacitor, so this block does nothing on the website.
+// Back closes a popup, then the side menu, then returns to the home screen,
+// and only exits the app from the home screen (instead of closing the app
+// on every press).
+(function setupAndroidBackButton() {
+  try {
+    const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (!App || typeof App.addListener !== 'function') return;
+    App.addListener('backButton', () => {
+      try {
+        const overlay = document.getElementById('modal-overlay');
+        if (overlay && !overlay.classList.contains('hidden')) { closeModal(); return; }
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && sidebar.classList.contains('open')) { closeSidebar(); return; }
+        if (STATE.user) {
+          const home = STATE.user.role === 'superadmin' ? 'admin' : 'dashboard';
+          if (STATE.currentPage && STATE.currentPage !== home) { navigate(home); return; }
+        }
+        App.exitApp();
+      } catch (err) {
+        console.warn('[back button]', err && err.message);
+      }
+    });
+  } catch (err) {
+    console.warn('[back button] setup failed:', err && err.message);
+  }
+})();
