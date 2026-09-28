@@ -176,26 +176,38 @@ const NAV = [
     { id: 'reconcile', label: '🗃 Cash Close',   perms: ['cash_close'] },
   ] },
   { section: 'Reports', items: [
-    { id: 'summary',   label: '📈 Monthly Summary', perms: ['reports_finance'] },
-    { id: 'reports',   label: '📊 Registers',       perms: ['reports_daily', 'reports_finance'] },
-    { id: 'gst',       label: '🧾 GST Report',      perms: ['reports_finance'] },
     { id: 'daily',     label: '📅 Daily View',      perms: ['reports_daily'] },
+    // One menu item, three tabs inside.
+    { id: 'reports_menu', label: '📊 Reports', title: 'Reports', tabs: [
+      { id: 'summary', label: '📈 Monthly Summary', perms: ['reports_finance'] },
+      { id: 'reports', label: '📊 Registers',       perms: ['reports_daily', 'reports_finance'] },
+      { id: 'gst',     label: '🧾 GST Report',      perms: ['reports_finance'], feature: 'feature_gst' },
+    ] },
   ] },
-  { section: 'Setup', items: [
-    { id: 'beds',      label: '🛏 Beds' },
-    { id: 'catalog',   label: '☕ Items & Prices',  perms: ['settings'] },
-    { id: 'settings',  label: '🏢 Business & GST',  perms: ['settings'] },
-    { id: 'staff',     label: '👤 Users & Access',  perms: ['staff'] },
-    { id: 'audit',     label: '🔍 Audit Log',       perms: ['audit'] },
-    { id: 'account',   label: '🔑 My Account' },
+  { section: 'Settings', items: [
+    // One menu item, every setup screen as a tab inside.
+    { id: 'settings_menu', label: '⚙️ Settings', title: 'Settings', tabs: [
+      { id: 'beds',     label: '🛏 Beds',            feature: 'feature_beds' },
+      { id: 'toggles',  label: '🎛 Feature Toggles', perms: ['settings'] },
+      { id: 'catalog',  label: '☕ Items & Prices',  perms: ['settings'] },
+      { id: 'settings', label: '🏢 Business & GST',  perms: ['settings'] },
+      { id: 'staff',    label: '👤 Users & Access',  perms: ['staff'], feature: 'feature_user_access' },
+      { id: 'audit',    label: '🔍 Audit Log',       perms: ['audit'] },
+      { id: 'account',  label: '🔑 My Account' },
+    ] },
   ] },
 ];
 const PAGES = NAV.flatMap(g => g.items);
 
-const allowed = (p) => !p.perms || p.perms.some(can);
+/** Turned off in Settings → Feature Toggles? (Unknown = shown.) */
+const featureOff = (p) => !!(p.feature && STATE.profile && STATE.profile[p.feature] === false);
+const allowed = (p) => {
+  if (p.tabs) return tabsOf(p).length > 0;          // a group shows if any of its tabs does
+  return (!p.perms || p.perms.some(can)) && !featureOff(p);
+};
 function tabsOf(group) { return (group.tabs || []).filter(allowed); }
-/** The menu group a page lives in (or null for a top-level page). */
-function groupOf(page) { return null; }   // no hidden tabs any more: every screen has its own menu item
+/** The menu group (Reports / Settings) a page lives in, or null for a top-level page. */
+function groupOf(page) { return PAGES.find(p => p.tabs && p.tabs.some(t => t.id === page)) || null; }
 
 /** Does the signed-in user have this permission? */
 function can(perm) {
@@ -242,7 +254,7 @@ function titleFor(page) {
   const map = { dashboard: 'Today', checkin: 'Check In', residents: 'Guests', payments: 'Take Payment', bookings: 'Bookings',
     expenses: 'Expenses', reconcile: 'Cash Close', summary: 'Monthly Summary', reports: 'Registers', gst: 'GST Report',
     daily: 'Daily View', beds: 'Beds', catalog: 'Items & Prices', settings: 'Business & GST', staff: 'Users & Access',
-    audit: 'Audit Log', feedback: 'Tenant Feedback', admin: 'Admin Panel', account: 'My Account' };
+    audit: 'Audit Log', toggles: 'Feature Toggles', feedback: 'Tenant Feedback', admin: 'Admin Panel', account: 'My Account' };
   return map[page] || page;
 }
 
@@ -460,6 +472,14 @@ function showApp() {
 
   buildNav();
   navigate('dashboard');
+  // Feature toggles live in the property profile; once it arrives, hide any
+  // tab the owner switched off. If it fails, everything simply stays shown.
+  getProfile().then(() => {
+    buildNav();
+    const g = groupOf(STATE.currentPage);
+    const navId = g ? g.id : STATE.currentPage;
+    document.querySelectorAll('.nav-list a').forEach(a => a.classList.toggle('active', a.dataset.page === navId));
+  }).catch(() => {});
   if (!navigator.onLine) document.getElementById('offline-indicator')?.classList.remove('hidden');
 }
 
@@ -486,6 +506,11 @@ async function renderPage(page) {
       </div>
       <div id="sub-content"></div>`;
     el = document.getElementById('sub-content');
+    // On a phone the tab bar is wider than the screen: slide the chosen tab into view.
+    try {
+      const bar = main.querySelector('.sub-tabs'), act = bar && bar.querySelector('.sub-tab.active');
+      if (bar && act) bar.scrollLeft = Math.max(0, act.offsetLeft - bar.offsetLeft - (bar.clientWidth - act.offsetWidth) / 2);
+    } catch (_) { /* cosmetic only */ }
   }
   el.innerHTML = '<div class="empty-state"><div class="loading-spinner" style="margin:0 auto"></div></div>';
   try {
@@ -506,7 +531,8 @@ async function renderPage(page) {
       case 'feedback':  await renderFeedback(el);  break;
       case 'catalog':   await renderCatalog(el);   break;
       case 'audit':     await renderAudit(el);     break;
-      case 'settings':  await renderSettings(el);  break;
+      case 'settings':  await renderSettings(el, 'business'); break;
+      case 'toggles':   await renderSettings(el, 'toggles');  break;
       case 'account':   await renderAccount(el);   break;
       case 'admin':     await renderAdminPanel(el); break;
       default:          el.innerHTML = '<div class="empty-state"><p>Page not found</p></div>';
@@ -1856,7 +1882,8 @@ function letterhead(c, title, sub, opts = {}) {
   // Bills lead with the dormitory name (what the guest knows); reports lead with the company.
   const dorm = opts.dormFirst && c.property_name;
   const main = dorm ? c.property_name : c.business_name;
-  const second = dorm ? (c.business_name && c.business_name !== c.property_name ? `A unit of ${c.business_name}` : '')
+  // Second line: the other name (company name on bills, dormitory name on reports), shown plainly.
+  const second = dorm ? (c.business_name && c.business_name !== c.property_name ? c.business_name : '')
     : (c.property_name && c.property_name !== c.business_name ? c.property_name : '');
   return `
       <header class="letterhead">
@@ -1864,7 +1891,8 @@ function letterhead(c, title, sub, opts = {}) {
           <div class="lh-name">${h(main)}</div>
           ${second ? `<div class="lh-sub">${h(second)}</div>` : ''}
           ${c.address ? `<div class="lh-addr">${h(c.address)}</div>` : '<div class="lh-addr no-print text-muted">Add your address in Business &amp; GST</div>'}
-          <div class="lh-addr">${[c.phone && `Ph: ${h(c.phone)}`, c.email && h(c.email), c.gstin && `GSTIN: ${h(c.gstin)}`].filter(Boolean).join(' · ')}</div>
+          ${c.phone || c.email ? `<div class="lh-addr">${[c.phone && `Phone: ${h(c.phone)}`, c.email && `Email: ${h(c.email)}`].filter(Boolean).join(' · ')}</div>` : ''}
+          ${c.gstin ? `<div class="lh-addr"><b>GSTIN: ${h(c.gstin)}</b></div>` : ''}
         </div>
         <div class="lh-right">
           <div class="lh-title">${h(title)}</div>
@@ -2260,11 +2288,13 @@ async function submitDiscount(residentId) {
 
 // ── Property Settings (owner only) ────────────────────────────
 // ── Settings → Business (details, GST, advanced rules) ─────────
-async function renderSettings(el) {
+async function renderSettings(el, onlyTab) {
   const st = await api('GET', '/properties/settings');
   const rs = (p) => ((p || 0) / 100);
   const rateOpts = (sel) => GST_RATES.map(r => `<option value="${r * 100}" ${r * 100 === sel ? 'selected' : ''}>${r}%</option>`).join('');
-  STATE.settingsTab = STATE.settingsTab || 'business';
+  // Each Settings tab (Business & GST, Feature Toggles) is its own page now;
+  // onlyTab picks which one this page shows.
+  STATE.settingsTab = onlyTab || STATE.settingsTab || 'business';
   const activeTab = STATE.settingsTab;
 
   // Tab renderer — called on tab switch without a full page reload
@@ -2284,7 +2314,7 @@ async function renderSettings(el) {
   };
 
   el.innerHTML = `
-    <div class="sub-tabs no-print" role="tablist" style="margin-bottom:16px">
+    <div class="sub-tabs no-print" role="tablist" style="margin-bottom:16px${onlyTab ? ';display:none' : ''}">
       <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'business' ? 'active' : ''}" data-tab="business" onclick="window._renderSettingsTab('business')">🏢 Business & GST</button>
       <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'toggles' ? 'active' : ''}" data-tab="toggles" onclick="window._renderSettingsTab('toggles')">⚙️ Feature Toggles</button>
     </div>
@@ -2310,6 +2340,9 @@ async function renderSettings(el) {
         <div class="field"><label for="ps-phone">Phone</label><input id="ps-phone" value="${h(st.contact_phone || '')}" type="tel" maxlength="20" /></div>
         <div class="field"><label for="ps-email">Email</label><input id="ps-email" value="${h(st.contact_email || '')}" type="email" maxlength="120" /></div>
       </div>
+      <div class="field"><label for="ps-gstin">GSTIN (GST number)</label><input id="ps-gstin" value="${h(st.gstin || '')}" maxlength="15" style="text-transform:uppercase" placeholder="07ABCDE1234F1Z5" autocapitalize="characters" />
+        <div class="field-note">Printed on every bill when filled in, even if you don't charge GST.</div>
+      </div>
     </div>
 
     <div class="card mb-20">
@@ -2317,7 +2350,6 @@ async function renderSettings(el) {
         <span><strong>We charge GST</strong><br/><span class="td-small">Turn on after you get your GSTIN. Bills then show GST and the GST report fills up.</span></span></label>
       <div id="ps-gst-box" ${st.gst_enabled ? '' : 'hidden'}>
         <div class="field-row mt-12">
-          <div class="field"><label for="ps-gstin">GSTIN *</label><input id="ps-gstin" value="${h(st.gstin || '')}" maxlength="15" style="text-transform:uppercase" placeholder="07ABCDE1234F1Z5" /></div>
           <div class="field"><label for="ps-rent-gst">GST on bed rent</label><select id="ps-rent-gst">${rateOpts(st.rent_gst_rate_bp || 0)}</select></div>
         </div>
         <div class="field"><label>Your bed rates…</label>
@@ -2362,21 +2394,21 @@ async function renderSettings(el) {
     return `
     <div class="card mb-20">
       <strong>Feature Toggles</strong>
-      <p class="td-small mt-4">Turn sections of DormBook on or off for this property.</p>
+      <p class="td-small mt-4">Show or hide screens in the menu for everyone at this property. Nothing is deleted — switch a screen back on any time.</p>
 
       <label class="switch-row mt-12">
-        <input type="checkbox" id="ps-toggle-beds" ${st.feature_beds !== false ? 'checked' : ''} />
-        <span><strong>Beds</strong><br/><span class="td-small">Show the Beds section in the menu.</span></span>
+        <input type="checkbox" id="ps-toggle-beds" ${st.feature_beds !== 0 ? 'checked' : ''} />
+        <span><strong>Beds</strong><br/><span class="td-small">Show the Beds tab in Settings.</span></span>
       </label>
 
       <label class="switch-row mt-8">
-        <input type="checkbox" id="ps-toggle-gst" ${st.feature_gst !== false ? 'checked' : ''} />
-        <span><strong>GST &amp; Business</strong><br/><span class="td-small">Show GST Report and Business &amp; GST settings.</span></span>
+        <input type="checkbox" id="ps-toggle-gst" ${st.feature_gst !== 0 ? 'checked' : ''} />
+        <span><strong>GST Report</strong><br/><span class="td-small">Show the GST Report tab in Reports.</span></span>
       </label>
 
       <label class="switch-row mt-8">
-        <input type="checkbox" id="ps-toggle-useraccess" ${st.feature_user_access !== false ? 'checked' : ''} />
-        <span><strong>User Access</strong><br/><span class="td-small">Show the Users &amp; Access section in the menu.</span></span>
+        <input type="checkbox" id="ps-toggle-useraccess" ${st.feature_user_access !== 0 ? 'checked' : ''} />
+        <span><strong>User Access</strong><br/><span class="td-small">Show the Users &amp; Access tab in Settings.</span></span>
       </label>
 
       <div class="mt-16">
@@ -2414,9 +2446,6 @@ async function submitSettings() {
       booking_lock_hours: int('ps-lock'),
       refund_approval_threshold_paise: int('ps-refund') * 100,
       cash_reconciliation_tolerance_paise: int('ps-cash') * 100,
-      feature_beds: document.getElementById('ps-toggle-beds')?.checked !== false,
-      feature_gst: document.getElementById('ps-toggle-gst')?.checked !== false,
-      feature_user_access: document.getElementById('ps-toggle-useraccess')?.checked !== false,
     });
     await getProfile(true).catch(() => {});
     toast('Settings saved', 'success');
@@ -2435,8 +2464,9 @@ async function submitToggles() {
       feature_user_access:  document.getElementById('ps-toggle-useraccess')?.checked ?? true,
     });
     await getProfile(true).catch(() => {});
-    if (msg) msg.textContent = '✅ Toggles saved.';
     toast('Feature toggles saved', 'success');
+    buildNav();            // hide / show the tabs right away
+    navigate('toggles');
   } catch (ex) {
     if (msg) msg.textContent = '';
     toast(ex.message, 'error');
@@ -2764,19 +2794,36 @@ async function adminActivate(id) {
 }
 
 function adminResetPassword(id, name) {
+  // autocapitalize/autocorrect off: phone keyboards otherwise turn "owner123"
+  // into "Owner123" or add a space, and the owner then gets "Invalid credentials".
   openModal(`Reset password: ${name}`, `
-    <div class="field"><label for="arp-pass">New password for the owner</label><input id="arp-pass" type="text" placeholder="Min 8 characters" /></div>
+    <div class="field"><label for="arp-pass">New password for the owner</label>
+      <input id="arp-pass" type="text" placeholder="Min 8 characters" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="200" /></div>
+    <div class="field-note">Type it exactly as the owner should type it. Capital and small letters are different.</div>
     <div id="arp-error" class="error-msg hidden"></div>
-    <div class="btn-group mt-12"><button class="btn btn-primary" onclick="submitAdminReset('${id}')">Set password</button>
+    <div class="btn-group mt-12"><button class="btn btn-primary" id="arp-btn" onclick="submitAdminReset('${id}')">Set password</button>
       <button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
 }
-
 async function submitAdminReset(id) {
   const err = document.getElementById('arp-error'); err.classList.add('hidden');
+  const btn = document.getElementById('arp-btn');
+  const pwd = document.getElementById('arp-pass').value.trim();
+  if (pwd.length < 8) { err.textContent = 'Password must be at least 8 characters'; err.classList.remove('hidden'); return; }
+  if (btn) btn.disabled = true;
   try {
-    const r = await api('POST', `/admin/accounts/${id}/reset-password`, { new_password: document.getElementById('arp-pass').value });
-    toast(r.message + '. Tell the owner the new password.', 'success', 6000); closeModal();
-  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+    const r = await api('POST', `/admin/accounts/${id}/reset-password`, { new_password: pwd });
+    const l = r.login || {};
+    // Show exactly what the owner must type, so nothing is lost in a message.
+    openModal('✅ Password changed', `
+      <p>Send these sign-in details to <b>${h(l.name || 'the owner')}</b>:</p>
+      <div class="card" style="margin:12px 0">
+        ${l.mobile ? `<div>Mobile: <b>${h(l.mobile)}</b></div>` : ''}
+        ${l.email ? `<div>or Email: <b>${h(l.email)}</b></div>` : ''}
+        <div class="mt-8">Password: <b style="font-family:monospace;font-size:17px">${h(r.password || pwd)}</b></div>
+      </div>
+      <p class="td-small">They are signed out on other phones and must sign in again with this password. Any "too many wrong tries" lock is removed.</p>
+      <div class="btn-group mt-12"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>`);
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); if (btn) btn.disabled = false; }
 }
 
 async function adminSuspend(id) {
