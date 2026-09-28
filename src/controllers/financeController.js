@@ -253,6 +253,12 @@ function updatePropertySettings(req, res) {
   }
   if (has('whatsapp_number')) set.whatsapp_number = text('whatsapp_number', 20) || null;
   if (has('gst_enabled')) set.gst_enabled = b.gst_enabled ? 1 : 0;
+  // Feature toggles (show/hide menu tabs). Only real booleans are accepted.
+  for (const k of ['feature_beds', 'feature_gst', 'feature_user_access']) {
+    if (!has(k)) continue;
+    if (typeof b[k] !== 'boolean') return res.status(400).json({ error: `${k} must be true or false` });
+    set[k] = b[k] ? 1 : 0;
+  }
   if (has('rent_gst_inclusive')) set.rent_gst_inclusive = b.rent_gst_inclusive ? 1 : 0;
   if (has('rent_gst_rate_bp')) {
     const n = Number(b.rent_gst_rate_bp);
@@ -314,6 +320,10 @@ function getPropertyProfile(req, res) {
     phone: p.contact_phone || p.whatsapp_number || '', email: p.contact_email || '', gstin: p.gstin || '',
     gst_enabled: !!p.gst_enabled, rent_gst_rate_bp: p.gst_enabled ? (p.rent_gst_rate_bp || 0) : 0,
     rent_gst_inclusive: p.rent_gst_inclusive !== 0,
+    // Feature toggles: a missing column (very old DB) means "shown".
+    feature_beds: p.feature_beds !== 0,
+    feature_gst: p.feature_gst !== 0,
+    feature_user_access: p.feature_user_access !== 0,
   });
 }
 
