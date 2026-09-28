@@ -310,4 +310,6 @@ function me(req, res) {
 }
 
 module.exports = {
-  login, register, forgotPassword,
+  login, register, forgotPassword, resetPassword, changePassword, me,
+  makeToken, publicUser, accountBlock,
+};
