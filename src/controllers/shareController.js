@@ -113,9 +113,10 @@ function renderBill(b) {
   <article class="doc">
     <div class="head">
       <div><div class="name">${esc(c.property_name || c.business_name)}</div>
-        ${c.property_name && c.business_name && c.property_name !== c.business_name ? `<div class="sub">A unit of ${esc(c.business_name)}</div>` : ''}
+        ${c.property_name && c.business_name && c.property_name !== c.business_name ? `<div class="sub">${esc(c.business_name)}</div>` : ''}
         ${c.address ? `<div class="sub">${esc(c.address)}</div>` : ''}
-        <div class="sub">${[c.phone && `Ph: ${esc(c.phone)}`, c.email && esc(c.email), c.gstin && `GSTIN: ${esc(c.gstin)}`].filter(Boolean).join(' · ')}</div></div>
+        ${c.phone || c.email ? `<div class="sub">${[c.phone && `Phone: ${esc(c.phone)}`, c.email && `Email: ${esc(c.email)}`].filter(Boolean).join(' · ')}</div>` : ''}
+        ${c.gstin ? `<div class="sub"><b>GSTIN: ${esc(c.gstin)}</b></div>` : ''}</div>
       <div><div class="ttl">${esc(b.title)}</div><div class="sub" style="text-align:right">No. ${esc(b.bill_no)} · ${fmtD(b.date)}</div></div>
     </div>
     <div class="two">
