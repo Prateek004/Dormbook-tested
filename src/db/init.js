@@ -150,7 +150,10 @@ function runMigrations(db) {
     otp_store: [['attempts', 'INTEGER NOT NULL DEFAULT 0']],
     properties: [['upi_id', 'TEXT'], ['upi_name', 'TEXT'], ['upi_uri', 'TEXT'], ['bank_holder', 'TEXT'], ['bank_name', 'TEXT'],
       ['bank_account_enc', 'TEXT'], ['bank_account_last4', 'TEXT'], ['bank_ifsc', 'TEXT'], ['bank_branch', 'TEXT'],
-      ['show_pay_on_bill', 'INTEGER NOT NULL DEFAULT 1']],
+      ['show_pay_on_bill', 'INTEGER NOT NULL DEFAULT 1'],
+      // Settings → Feature Toggles: show/hide menu tabs (1 = shown, the default).
+      ['feature_beds', 'INTEGER NOT NULL DEFAULT 1'], ['feature_gst', 'INTEGER NOT NULL DEFAULT 1'],
+      ['feature_user_access', 'INTEGER NOT NULL DEFAULT 1']],
   };
   for (const [table, list] of Object.entries(accessCols)) {
     const have = getColumns(table);
