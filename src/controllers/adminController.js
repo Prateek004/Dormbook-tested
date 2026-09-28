@@ -87,13 +87,28 @@ function activateAccount(req, res) {
 function resetOwnerPassword(req, res) {
   const bcrypt = require('bcryptjs');
   const db = getDb();
-  res.json({ ok: true, message: `Password reset for ${owner.name}` });
+  // Phone keyboards often add a space after a suggested word; a space at the
+  // start or end is never meant to be part of the password, so drop it.
+  const pwd = (req.body && req.body.new_password != null ? String(req.body.new_password) : '').trim();
   if (pwd.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
-  const owner = db.prepare("SELECT id, name FROM users WHERE account_id = ? AND role = 'owner' ORDER BY created_at LIMIT 1").get(req.params.id);
+  if (pwd.length > 200) return res.status(400).json({ error: 'New password is too long' });
+  const owner = db.prepare("SELECT id, name, mobile, email FROM users WHERE account_id = ? AND role = 'owner' ORDER BY created_at LIMIT 1").get(req.params.id);
   if (!owner) return res.status(404).json({ error: 'Owner not found for this account' });
-  db.prepare("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(bcrypt.hashSync(pwd, parseInt(process.env.BCRYPT_ROUNDS || '12', 10)), owner.id);
-  res.json({ ok: true, message: `Password reset for ${owner.name}` });
+  // Whole-second timestamp: tokens carry whole-second issue times, so a login
+  // right after the reset is never mistaken for an old session.
+  const now = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
+  // Also clear any "too many wrong tries" lock (otherwise the owner stays
+  // blocked even with the new password) and sign out old sessions.
+  db.prepare("UPDATE users SET password_hash = ?, pwd_changed_at = ?, failed_logins = 0, locked_until = NULL, updated_at = datetime('now') WHERE id = ?")
+    .run(bcrypt.hashSync(pwd, parseInt(process.env.BCRYPT_ROUNDS || '12', 10)), now, owner.id);
+  console.log(`[SUPERADMIN] Owner password reset: account ${req.params.id} (user ${owner.id}) by ${req.user.id}`);
+  res.json({
+    ok: true,
+    message: `Password reset for ${owner.name}`,
+    // What the owner types on the sign-in screen.
+    login: { name: owner.name, mobile: owner.mobile || '', email: owner.email || '' },
+    password: pwd,
+  });
 }
 
 /**
