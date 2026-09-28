@@ -88,7 +88,21 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 function sameProperty(req, res, next) {
+  // A login with no PG property (the super-admin, or a broken/legacy user row)
+  // can still read (it simply sees empty lists), but must never write to
+  // property data: every insert needs a property_id, and without one SQLite
+  // rejects the row and the request fails with a 500.
+  if (!req.user.property_id && !SAFE_METHODS.has(req.method)) {
+    return res.status(403).json({
+      error: req.user.role === 'superadmin'
+        ? 'The super-admin login has no PG property. Log in with an owner or staff account to change property data.'
+        : 'This login is not linked to any PG property. Contact support.',
+    });
+  }
+
   // Superadmin has no property — skip this check
   if (req.user.role === 'superadmin') return next();
 
