@@ -5,6 +5,24 @@
    All monetary display: paise ÷ 100 = rupees
    ============================================================ */
 
+// ── App look vs website look ─────────────────────────────────
+// Inside the Android app (Capacitor) or when installed to the home screen, the
+// app gets a phone-app layout: bottom tab bar, large titles, list rows.
+// A normal browser keeps the website layout. Add ?app=1 to the address to
+// preview the app look in a browser (?app=0 turns it off again).
+const IS_APP_UI = (() => {
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get('app') === '1') localStorage.setItem('dormbook_app_ui', '1');
+    if (q.get('app') === '0') localStorage.removeItem('dormbook_app_ui');
+    const cap = window.Capacitor;
+    return !!(cap && (typeof cap.isNativePlatform === 'function' ? cap.isNativePlatform() : true))
+      || !!(window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || localStorage.getItem('dormbook_app_ui') === '1';
+  } catch (_) { return false; }
+})();
+if (IS_APP_UI) document.documentElement.classList.add('app-ui');
+
 // ── Service Worker registration ──────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -173,6 +191,8 @@ const NAV = [
   ] },
   { section: 'Money', items: [
     { id: 'expenses',  label: '📋 Expenses',     perms: ['expenses'] },
+    { id: 'purchases', label: '🛒 Purchases',    perms: ['expenses'] },
+    { id: 'salary',    label: '👥 Staff Salary', ownerOnly: true },
     { id: 'reconcile', label: '🗃 Cash Close',   perms: ['cash_close'] },
   ] },
   { section: 'Reports', items: [
@@ -181,17 +201,27 @@ const NAV = [
     { id: 'reports_menu', label: '📊 Reports', title: 'Reports', tabs: [
       { id: 'summary', label: '📈 Monthly Summary', perms: ['reports_finance'] },
       { id: 'reports', label: '📊 Registers',       perms: ['reports_daily', 'reports_finance'] },
-      { id: 'gst',     label: '🧾 GST Report',      perms: ['reports_finance'], feature: 'feature_gst' },
+      { id: 'gst',     label: '🧾 GST Report',      perms: ['reports_finance'] },
+    ] },
+  ] },
+  { section: 'Accounts', items: [
+    // Books built from the money ledger. Recording owner money is owner-only (checked on the server too).
+    { id: 'accounts_menu', label: '📒 Accounts', title: 'Accounts', tabs: [
+      { id: 'acc_entries', label: '💰 Record money',   perms: ['reports_finance'] },
+      { id: 'acc_daybook', label: '📒 Day Book',       perms: ['reports_finance'] },
+      { id: 'acc_ledger',  label: '📘 Ledgers',        perms: ['reports_finance'] },
+      { id: 'acc_tb',      label: '⚖️ Trial Balance',  perms: ['reports_finance'] },
+      { id: 'acc_pl',      label: '📈 Profit & Loss',  perms: ['reports_finance'] },
+      { id: 'acc_bs',      label: '🏦 Balance Sheet',  perms: ['reports_finance'] },
     ] },
   ] },
   { section: 'Settings', items: [
     // One menu item, every setup screen as a tab inside.
     { id: 'settings_menu', label: '⚙️ Settings', title: 'Settings', tabs: [
-      { id: 'beds',     label: '🛏 Beds',            feature: 'feature_beds' },
-      { id: 'toggles',  label: '🎛 Feature Toggles', perms: ['settings'] },
+      { id: 'beds',     label: '🛏 Beds' },
       { id: 'catalog',  label: '☕ Items & Prices',  perms: ['settings'] },
       { id: 'settings', label: '🏢 Business & GST',  perms: ['settings'] },
-      { id: 'staff',    label: '👤 Users & Access',  perms: ['staff'], feature: 'feature_user_access' },
+      { id: 'staff',    label: '👤 Users & Access',  perms: ['staff'] },
       { id: 'audit',    label: '🔍 Audit Log',       perms: ['audit'] },
       { id: 'account',  label: '🔑 My Account' },
     ] },
@@ -199,11 +229,10 @@ const NAV = [
 ];
 const PAGES = NAV.flatMap(g => g.items);
 
-/** Turned off in Settings → Feature Toggles? (Unknown = shown.) */
-const featureOff = (p) => !!(p.feature && STATE.profile && STATE.profile[p.feature] === false);
 const allowed = (p) => {
   if (p.tabs) return tabsOf(p).length > 0;          // a group shows if any of its tabs does
-  return (!p.perms || p.perms.some(can)) && !featureOff(p);
+  if (p.ownerOnly && !(STATE.user && STATE.user.role === 'owner')) return false;
+  return !p.perms || p.perms.some(can);
 };
 function tabsOf(group) { return (group.tabs || []).filter(allowed); }
 /** The menu group (Reports / Settings) a page lives in, or null for a top-level page. */
@@ -247,14 +276,64 @@ function navigate(page) {
     a.classList.toggle('active', a.dataset.page === navId)
   );
   document.getElementById('page-title').textContent = group ? group.title : titleFor(page);
+  updateTabbar(page);
   renderPage(page);
+}
+
+// ── App tab bar: Today · Guests · (+ Check In) · Pay · More ──
+const TAB_ICONS = {
+  home: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h5v-6h4v6h5V9.5"/></svg>',
+  guests: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14.6c2.6.1 4.6 1.8 5.1 4.9"/></svg>',
+  pay: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 15h3"/></svg>',
+  more: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  search: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>',
+};
+function buildTabbar() {
+  if (!IS_APP_UI) return;
+  const items = [
+    { page: 'dashboard', label: 'Today', icon: TAB_ICONS.home },
+    { page: 'residents', label: 'Guests', icon: TAB_ICONS.guests },
+    { page: 'checkin', label: 'Check In', fab: true, perms: ['checkin'] },
+    { page: 'payments', label: 'Pay', icon: TAB_ICONS.pay, perms: ['payments', 'approvals'] },
+    { page: '__more', label: 'More', icon: TAB_ICONS.more },
+  ].filter(t => !t.perms || t.perms.some(can));
+  let bar = document.getElementById('tabbar');
+  if (!bar) {
+    bar = document.createElement('nav');
+    bar.id = 'tabbar'; bar.className = 'tabbar'; bar.setAttribute('aria-label', 'Main');
+    document.getElementById('main-app').appendChild(bar);
+  }
+  bar.innerHTML = items.map(t => t.fab
+    ? `<button class="tab tab-fab" data-tab="${t.page}" aria-label="${h(t.label)}"><span class="fab">${TAB_ICONS.plus}</span><span>${h(t.label)}</span></button>`
+    : `<button class="tab" data-tab="${t.page}">${t.icon}<span>${h(t.label)}</span></button>`).join('');
+  bar.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => {
+    const page = b.dataset.tab;
+    if (page === '__more') { document.getElementById('sidebar').classList.toggle('open'); return; }
+    closeSidebar();
+    navigate(page);
+  }));
+  document.documentElement.classList.add('has-tabbar');
+  // Search button in the header opens Guests with the search box ready.
+  if (!document.getElementById('app-search')) {
+    const btn = document.createElement('button');
+    btn.id = 'app-search'; btn.className = 'app-search'; btn.setAttribute('aria-label', 'Search guests');
+    btn.innerHTML = TAB_ICONS.search;
+    btn.addEventListener('click', () => { navigate('residents'); setTimeout(() => document.getElementById('res-search')?.focus(), 400); });
+    document.querySelector('.page-header').appendChild(btn);
+  }
+}
+function updateTabbar(page) {
+  const bar = document.getElementById('tabbar'); if (!bar) return;
+  bar.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === page));
 }
 
 function titleFor(page) {
   const map = { dashboard: 'Today', checkin: 'Check In', residents: 'Guests', payments: 'Take Payment', bookings: 'Bookings',
     expenses: 'Expenses', reconcile: 'Cash Close', summary: 'Monthly Summary', reports: 'Registers', gst: 'GST Report',
     daily: 'Daily View', beds: 'Beds', catalog: 'Items & Prices', settings: 'Business & GST', staff: 'Users & Access',
-    audit: 'Audit Log', toggles: 'Feature Toggles', feedback: 'Tenant Feedback', admin: 'Admin Panel', account: 'My Account' };
+    audit: 'Audit Log', acc_entries: 'Record money', acc_daybook: 'Day Book', acc_ledger: 'Ledgers', acc_tb: 'Trial Balance',
+    acc_pl: 'Profit & Loss', acc_bs: 'Balance Sheet', purchases: 'Purchases', salary: 'Staff Salary', feedback: 'Tenant Feedback', admin: 'Admin Panel', account: 'My Account' };
   return map[page] || page;
 }
 
@@ -471,15 +550,8 @@ function showApp() {
   }
 
   buildNav();
+  buildTabbar();
   navigate('dashboard');
-  // Feature toggles live in the property profile; once it arrives, hide any
-  // tab the owner switched off. If it fails, everything simply stays shown.
-  getProfile().then(() => {
-    buildNav();
-    const g = groupOf(STATE.currentPage);
-    const navId = g ? g.id : STATE.currentPage;
-    document.querySelectorAll('.nav-list a').forEach(a => a.classList.toggle('active', a.dataset.page === navId));
-  }).catch(() => {});
   if (!navigator.onLine) document.getElementById('offline-indicator')?.classList.remove('hidden');
 }
 
@@ -523,6 +595,8 @@ async function renderPage(page) {
       case 'bookings':  await renderBookings(el);  break;
       case 'reconcile': await renderReconcile(el); break;
       case 'expenses':  await renderExpenses(el);  break;
+      case 'purchases': await renderPurchases(el); break;
+      case 'salary':    await renderSalary(el);    break;
       case 'reports':   await renderReports(el);   break;
       case 'gst':       await renderReports(el, 'gst'); break;
       case 'summary':   await renderMonthly(el);   break;
@@ -532,7 +606,8 @@ async function renderPage(page) {
       case 'catalog':   await renderCatalog(el);   break;
       case 'audit':     await renderAudit(el);     break;
       case 'settings':  await renderSettings(el, 'business'); break;
-      case 'toggles':   await renderSettings(el, 'toggles');  break;
+      case 'acc_entries': case 'acc_daybook': case 'acc_ledger': case 'acc_tb': case 'acc_pl': case 'acc_bs':
+        await renderAccounts(el, page); break;
       case 'account':   await renderAccount(el);   break;
       case 'admin':     await renderAdminPanel(el); break;
       default:          el.innerHTML = '<div class="empty-state"><p>Page not found</p></div>';
@@ -1742,7 +1817,7 @@ async function renderExpenses(el) {
         <div class="field"><label>Category *</label>
           <select id="ex-cat">
             <option value="utilities">Utilities</option><option value="maintenance">Maintenance</option>
-            <option value="salary">Salary</option><option value="cleaning">Cleaning</option>
+            <option value="salary">Salary (one-off; regular staff go in Staff Salary)</option><option value="cleaning">Cleaning</option>
             <option value="grocery">Grocery</option><option value="other">Other</option>
           </select>
         </div>
@@ -1755,6 +1830,7 @@ async function renderExpenses(el) {
         </div>
       </div>
       <div class="field"><label>Description</label><input id="ex-desc" /></div>
+      <div class="field-note">Monthly staff pay goes in <a href="#" onclick="event.preventDefault();navigate('salary')">Staff Salary</a>; things you buy (blankets, utensils) go in <a href="#" onclick="event.preventDefault();navigate('purchases')">Purchases</a>.</div>
       <div id="ex-error" class="error-msg hidden"></div>
       <button class="btn btn-primary mt-12" onclick="submitExpense()">Add Expense</button>
     </div>
@@ -1833,7 +1909,7 @@ async function renderReports(el, forced) {
         <button class="btn btn-outline btn-sm" onclick="setReportRange('${page}','last')">Last month</button>
       </div>
     </div>
-    <div class="sub-tabs no-print" role="tablist" style="margin-bottom:12px">
+    <div class="sub-tabs no-print" id="rp-tabs" role="tablist" style="margin-bottom:12px">
       <button role="tab" class="sub-tab ${activeTab === 'data' ? 'active' : ''}" onclick="window._rpTab('data')">📊 Data</button>
       <button role="tab" class="sub-tab ${activeTab === 'options' ? 'active' : ''}" onclick="window._rpTab('options')">⚙️ Options</button>
     </div>
@@ -1845,7 +1921,7 @@ async function renderReports(el, forced) {
     <div id="rp-doc"><div class="loading-spinner" style="margin:40px auto"></div></div>`;
   window._rpTab = (tab) => {
     st.activeTab = tab;
-    document.querySelectorAll('.sub-tab').forEach(b => b.classList.toggle('active', b.textContent.trim() === (tab === 'data' ? '📊 Data' : '⚙️ Options')));
+    document.querySelectorAll('#rp-tabs .sub-tab').forEach(b => b.classList.toggle('active', b.textContent.trim() === (tab === 'data' ? '📊 Data' : '⚙️ Options')));
     const panel = document.getElementById('rp-options-panel');
     if (panel) panel.hidden = (tab !== 'options');
   };
@@ -2134,6 +2210,7 @@ async function renderDaily(el) {
   const tabs = DAILY_TABS.filter(t => t.roles.includes(role));
   if (!tabs.find(t => t.id === STATE.dailyTab)) STATE.dailyTab = tabs[0].id;
   const date = STATE.dailyDate || todayIST();
+  if (IS_APP_UI) return renderDailyApp(el, tabs, date);
   document.getElementById('header-actions').innerHTML =
     `<input id="daily-date" type="date" max="${todayIST()}" value="${date}" style="padding:6px 10px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:13px" />`;
   document.getElementById('daily-date').addEventListener('change', e => { STATE.dailyDate = e.target.value; renderPage('daily'); });
@@ -2191,10 +2268,59 @@ async function dailyDues(date) {
       'No dues — everyone is paid up 🎉')}</div>`;
 }
 
+/** Daily View in the app: text tabs, Today / Yesterday / Pick date chips, list-style Cash Book. */
+async function renderDailyApp(el, tabs, date) {
+  const t = todayIST(), y = new Date(Date.parse(t) - 86400000).toISOString().slice(0, 10);
+  const setDate = (d) => { STATE.dailyDate = d; renderPage('daily'); };
+  window._dailySetDate = setDate;
+  const chip = (label, d, on) => `<button class="pill ${on ? 'on' : ''}" onclick="_dailySetDate('${d}')">${label}</button>`;
+  const picked = date !== t && date !== y;
+  const head = `
+    <div class="app-tabs" role="tablist">${tabs.map(x => `<button role="tab" class="app-tab ${x.id === STATE.dailyTab ? 'active' : ''}"
+      onclick="STATE.dailyTab='${x.id}';renderPage('daily')">${h(x.label)}</button>`).join('')}</div>
+    <div class="pill-row">
+      ${chip('Today', t, date === t)}${chip('Yesterday', y, date === y)}
+      <label class="pill ${picked ? 'on' : ''}">${picked ? fmtDate(date) : 'Pick date'}
+        <input type="date" class="pill-date" max="${t}" value="${date}" onchange="_dailySetDate(this.value)" /></label>
+    </div>`;
+  const body = STATE.dailyTab === 'cash' ? await dailyCashApp(date)
+    : await ({ snapshot: dailySnapshot, dues: dailyDues, beds: dailyBeds, movements: dailyMovements }[STATE.dailyTab])(date);
+  el.innerHTML = head + body;
+}
+async function dailyCashApp(date) {
+  const d = await api('GET', `/reports/daily/cash-book?date=${date}`);
+  const f = STATE.cashFilter || 'all';
+  window._cashFilter = (v) => { STATE.cashFilter = v; renderPage('daily'); };
+  const rows = d.entries.filter(e => f === 'all' || (f === 'in') === cashIsIn(e.kind));
+  const inT = d.entries.filter(e => cashIsIn(e.kind)).reduce((a, e) => a + e.amount_paise, 0);
+  const outT = d.entries.filter(e => !cashIsIn(e.kind)).reduce((a, e) => a + e.amount_paise, 0);
+  const tag = { EXPENSE: 'EX', PURCHASE: 'PU', SALARY: 'SA', OWNER_IN: 'OW', OWNER_OUT: 'OW', OTHER_INCOME: 'OI', BANK_DEPOSIT: 'BK', BANK_WITHDRAW: 'BK' };
+  return `
+    <div class="seg" role="tablist">${['all', 'in', 'out'].map(v => `<button class="seg-btn ${f === v ? 'on' : ''}" onclick="_cashFilter('${v}')">${v === 'all' ? 'All' : v === 'in' ? 'In' : 'Out'}</button>`).join('')}</div>
+    <div class="cash-sum"><span>In <b class="amt-in">+${rupees(inT)}</b></span><span>Out <b class="amt-out">−${rupees(outT)}</b></span>
+      <span>Drawer <b>${d.close ? rupees(d.close.counted_cash_paise) : rupees(d.drawer.expected_cash_paise)}</b></span></div>
+    ${rows.length ? `<div class="list">${rows.map(e => {
+      const inn = cashIsIn(e.kind), who = e.resident || e.category || '';
+      const title = `${CASH_LABEL[e.kind] || e.kind}${who ? `, ${who}` : ''}`;
+      const sign = (inn ? 1 : -1) * Math.sign(e.amount_paise);
+      return `<div class="list-row ${e.is_reversed || e.reversal_of ? 'is-muted' : ''}">
+        <div class="avatar">${h(e.resident ? initials(e.resident) : (tag[e.kind] || initials(CASH_LABEL[e.kind] || '')))}</div>
+        <div class="list-main"><div class="list-title">${h(title)}${e.reversal_of ? ' (reversal)' : ''}</div>
+          <div class="list-sub">${new Date(e.created_at).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}, ${h(({ cash: 'Cash', upi: 'UPI', card: 'Card', bank_transfer: 'Bank' })[e.mode] || (e.kind === 'BANK_DEPOSIT' ? 'Cash → Bank' : e.kind === 'BANK_WITHDRAW' ? 'Bank → Cash' : ''))}${e.reason ? ` · ${h(e.reason)}` : ''}</div></div>
+        <div class="list-end"><div class="${sign >= 0 ? 'amt-in' : 'amt-out'}">${sign >= 0 ? '+' : '−'}${rupees(Math.abs(e.amount_paise))}</div></div>
+      </div>`; }).join('')}</div>` : '<p class="td-small text-muted mt-12">No money moved on this day.</p>'}`;
+}
+
+const CASH_LABEL = { PAYMENT: 'Payment', DEPOSIT_IN: 'Deposit in', DEPOSIT_REFUND: 'Deposit refund', CREDIT_REFUND: 'Advance refund',
+  EXPENSE: 'Expense', BANK_DEPOSIT: 'Cash to bank', BANK_WITHDRAW: 'Cash from bank', OWNER_IN: 'Owner money in',
+  OWNER_OUT: 'Owner money out', OTHER_INCOME: 'Other income', SALARY: 'Salary', PURCHASE: 'Purchase' };
+/** Money coming in (shown +) vs going out (shown −). */
+const cashIsIn = k => ['PAYMENT', 'DEPOSIT_IN', 'OWNER_IN', 'OTHER_INCOME', 'BANK_WITHDRAW'].includes(k);
+
 async function dailyCash(date) {
   const d = await api('GET', `/reports/daily/cash-book?date=${date}`);
-  const label = { PAYMENT: 'Payment', DEPOSIT_IN: 'Deposit in', DEPOSIT_REFUND: 'Deposit refund', EXPENSE: 'Expense', BANK_DEPOSIT: 'To bank' };
-  const isIn = k => k === 'PAYMENT' || k === 'DEPOSIT_IN';
+  const label = CASH_LABEL;
+  const isIn = cashIsIn;
   const modes = Object.entries(d.by_mode);
   return `
     <div class="stat-grid mb-20">
@@ -2217,7 +2343,7 @@ async function dailyCash(date) {
 
 async function dailyBeds() {
   const d = await api('GET', '/reports/daily/bed-map');
-  const color = { occupied: 'accent', available: 'success', reserved: 'info', cleaning: 'warning', pending: 'gray' };
+  const color = { occupied: 'occupied', available: 'success', reserved: 'info', cleaning: 'warning', pending: 'gray' };
   return d.floors.map(f => `
     <div class="card mb-20"><strong>${h(f.floor)}</strong>
       ${f.rooms.map(r => `<div class="mt-12"><div class="td-small">Room ${h(r.room)}</div><div class="stat-grid">
@@ -2308,15 +2434,12 @@ async function renderSettings(el, onlyTab) {
 
     if (tab === 'business') {
       panel.innerHTML = businessTabHtml(st, rateOpts);
-    } else if (tab === 'toggles') {
-      panel.innerHTML = togglesTabHtml(st);
     }
   };
 
   el.innerHTML = `
     <div class="sub-tabs no-print" role="tablist" style="margin-bottom:16px${onlyTab ? ';display:none' : ''}">
       <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'business' ? 'active' : ''}" data-tab="business" onclick="window._renderSettingsTab('business')">🏢 Business & GST</button>
-      <button role="tab" class="sub-tab settings-tab-btn ${activeTab === 'toggles' ? 'active' : ''}" data-tab="toggles" onclick="window._renderSettingsTab('toggles')">⚙️ Feature Toggles</button>
     </div>
     <div id="settings-tab-panel"></div>
   `;
@@ -2390,34 +2513,6 @@ async function renderSettings(el, onlyTab) {
     <button class="btn btn-primary" id="ps-save" onclick="submitSettings()">Save settings</button>`;
   }
 
-  function togglesTabHtml(st) {
-    return `
-    <div class="card mb-20">
-      <strong>Feature Toggles</strong>
-      <p class="td-small mt-4">Show or hide screens in the menu for everyone at this property. Nothing is deleted — switch a screen back on any time.</p>
-
-      <label class="switch-row mt-12">
-        <input type="checkbox" id="ps-toggle-beds" ${st.feature_beds !== 0 ? 'checked' : ''} />
-        <span><strong>Beds</strong><br/><span class="td-small">Show the Beds tab in Settings.</span></span>
-      </label>
-
-      <label class="switch-row mt-8">
-        <input type="checkbox" id="ps-toggle-gst" ${st.feature_gst !== 0 ? 'checked' : ''} />
-        <span><strong>GST Report</strong><br/><span class="td-small">Show the GST Report tab in Reports.</span></span>
-      </label>
-
-      <label class="switch-row mt-8">
-        <input type="checkbox" id="ps-toggle-useraccess" ${st.feature_user_access !== 0 ? 'checked' : ''} />
-        <span><strong>User Access</strong><br/><span class="td-small">Show the Users &amp; Access tab in Settings.</span></span>
-      </label>
-
-      <div class="mt-16">
-        <button class="btn btn-primary" onclick="submitToggles()">Save toggles</button>
-      </div>
-      <div id="tgl-msg" class="td-small mt-8" style="color:var(--success,green)"></div>
-    </div>`;
-  }
-
   // Render the active tab on load
   window._renderSettingsTab(activeTab);
 }
@@ -2454,25 +2549,6 @@ async function submitSettings() {
 }
 
 // ── Staff ─────────────────────────────────────────────────────
-async function submitToggles() {
-  const msg = document.getElementById('tgl-msg');
-  if (msg) msg.textContent = '';
-  try {
-    await api('PATCH', '/properties/settings', {
-      feature_beds:         document.getElementById('ps-toggle-beds')?.checked ?? true,
-      feature_gst:          document.getElementById('ps-toggle-gst')?.checked ?? true,
-      feature_user_access:  document.getElementById('ps-toggle-useraccess')?.checked ?? true,
-    });
-    await getProfile(true).catch(() => {});
-    toast('Feature toggles saved', 'success');
-    buildNav();            // hide / show the tabs right away
-    navigate('toggles');
-  } catch (ex) {
-    if (msg) msg.textContent = '';
-    toast(ex.message, 'error');
-  }
-}
-
 // ── Staff ─────────────────────────────────────────────────────
 async function renderStaff(el) {
   const data = await api('GET', '/staff');
@@ -3139,6 +3215,551 @@ async function submitChangeMpin() {
 
 // ── Boot ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);
+
+
+// ── Purchases (blankets, utensils, cleaning supplies ...) ─────
+const PURCHASE_CATS = ['Bedding & linen', 'Furniture & fittings', 'Kitchen & utensils', 'Groceries & food', 'Cleaning supplies',
+  'Toiletries', 'Electrical & repairs', 'Stationery', 'Other'];
+async function renderPurchases(el) {
+  const t = todayIST();
+  STATE.pur = STATE.pur || { from: t.slice(0, 8) + '01', to: t };
+  const st = STATE.pur;
+  const d = await api('GET', `/purchases?from=${st.from}&to=${st.to}`);
+  const owner = STATE.user.role === 'owner';
+  el.innerHTML = `
+    <div class="card mb-20">
+      <strong>New purchase</strong>
+      <p class="td-small mt-4">Things you buy for the PG. Add every item on the bill; the total is worked out for you.</p>
+      <div class="field-row mt-12">
+        <div class="field"><label for="pu-date">Date</label><input id="pu-date" type="date" value="${t}" max="${t}" /></div>
+        <div class="field"><label for="pu-cat">Category</label><select id="pu-cat">${PURCHASE_CATS.map(c => `<option>${h(c)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="pu-vendor">Shop / vendor</label><input id="pu-vendor" maxlength="80" placeholder="e.g. Laxmi Stores" /></div>
+        <div class="field"><label for="pu-bill">Bill no. (optional)</label><input id="pu-bill" maxlength="40" /></div>
+      </div>
+      <div id="pu-items"></div>
+      <button class="btn btn-outline btn-sm mt-8" type="button" onclick="addPurchaseRow()">+ Add item</button>
+      <div class="pu-total mt-12">Total <b id="pu-total">₹0.00</b></div>
+      <div class="field-row mt-12">
+        <div class="field"><label for="pu-mode">Paid by</label>
+          <select id="pu-mode"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option></select></div>
+        <div class="field"><label for="pu-note">Note</label><input id="pu-note" maxlength="300" /></div>
+      </div>
+      <div id="pu-error" class="error-msg hidden"></div>
+      <button class="btn btn-primary" id="pu-save" onclick="submitPurchase()">Save purchase</button>
+    </div>
+    <div class="report-bar no-print">
+      <div class="field"><label for="pur-from">From</label><input id="pur-from" type="date" value="${st.from}" max="${t}" /></div>
+      <div class="field"><label for="pur-to">To</label><input id="pur-to" type="date" value="${st.to}" max="${t}" /></div>
+    </div>
+    <div class="card">
+      <div class="flex-between mb-12"><strong>Purchases</strong><span class="fw-bold">${rupees(d.total)} total</span></div>
+      ${Object.keys(d.by_category).length ? `<div class="td-small mb-12">${Object.entries(d.by_category).map(([c, v]) => `${h(c)} ${rupees(v)}`).join(' · ')}</div>` : ''}
+      ${d.purchases.length ? `<div class="list">${d.purchases.map(p => `
+        <div class="list-row ${p.cancelled ? 'is-muted' : ''}">
+          <div class="avatar">${h(initials(p.vendor || p.category))}</div>
+          <div class="list-main"><div class="list-title">${h(p.vendor || p.category)}${p.cancelled ? ' <span class="badge badge-gray">undone</span>' : ''}</div>
+            <div class="list-sub">${fmtDate(p.date)} · ${h(p.category)} · ${h(p.mode)}${p.bill_no ? ` · Bill ${h(p.bill_no)}` : ''}</div>
+            <div class="list-sub">${p.items.map(i => `${h(i.item)} × ${i.qty}${i.unit ? ' ' + h(i.unit) : ''} @ ${rupees(i.rate)}`).join(', ')}</div></div>
+          <div class="list-end"><div class="amt-out">−${rupees(p.total)}</div>
+            ${owner && !p.cancelled && p.ledger_id ? `<button class="btn btn-ghost btn-sm" onclick="undoLedger('${h(p.ledger_id)}','purchase')">Undo</button>` : ''}</div>
+        </div>`).join('')}</div>` : '<p class="td-small text-muted">No purchases in this period.</p>'}
+    </div>`;
+  addPurchaseRow();
+  const go = () => { st.from = document.getElementById('pur-from').value || st.from; st.to = document.getElementById('pur-to').value || st.to; renderPage('purchases'); };
+  document.getElementById('pur-from').addEventListener('change', go);
+  document.getElementById('pur-to').addEventListener('change', go);
+}
+function initials(name) {
+  const w = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return ((w[0] || '?')[0] + (w[1] ? w[1][0] : (w[0] || '')[1] || '')).toUpperCase();
+}
+function addPurchaseRow() {
+  const box = document.getElementById('pu-items'); if (!box) return;
+  const row = document.createElement('div');
+  row.className = 'pu-row';
+  row.innerHTML = `
+    <input class="pu-item" maxlength="80" placeholder="Item (e.g. Blanket)" aria-label="Item" />
+    <input class="pu-qty" type="number" min="0" step="any" value="1" inputmode="decimal" placeholder="Qty" aria-label="Quantity" />
+    <input class="pu-rate" type="number" min="0" step="0.01" placeholder="Rate ₹" inputmode="decimal" aria-label="Rate in rupees" />
+    <span class="pu-amt">₹0.00</span>
+    <button class="btn btn-ghost btn-sm" type="button" aria-label="Remove item">✕</button>`;
+  row.querySelector('button').addEventListener('click', () => { if (box.children.length > 1) { row.remove(); purchaseTotal(); } });
+  row.querySelectorAll('input').forEach(i => i.addEventListener('input', purchaseTotal));
+  box.appendChild(row);
+}
+function purchaseTotal() {
+  let total = 0;
+  document.querySelectorAll('#pu-items .pu-row').forEach(r => {
+    const q = parseFloat(r.querySelector('.pu-qty').value) || 0, rate = Math.round((parseFloat(r.querySelector('.pu-rate').value) || 0) * 100);
+    const amt = Math.round(q * rate); total += amt;
+    r.querySelector('.pu-amt').textContent = rate ? `${q} × ${rupees(rate)} = ${rupees(amt)}` : rupees(0);
+  });
+  const t = document.getElementById('pu-total'); if (t) t.textContent = rupees(total);
+  return total;
+}
+async function submitPurchase() {
+  const err = document.getElementById('pu-error'); err.classList.add('hidden');
+  const show = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+  const items = [];
+  for (const r of document.querySelectorAll('#pu-items .pu-row')) {
+    const item = r.querySelector('.pu-item').value.trim(), qtyRaw = r.querySelector('.pu-qty').value, rateRaw = r.querySelector('.pu-rate').value;
+    if (!item && !rateRaw) continue;                   // empty row
+    const qty = parseFloat(qtyRaw), rate = Math.round(parseFloat(rateRaw) * 100);
+    if (!item) return show('Write the item name on every line');
+    if (!(qty > 0)) return show(`${item}: quantity must be more than zero`);
+    if (!Number.isFinite(rate) || rate < 0) return show(`${item}: type the rate`);
+    items.push({ item, qty, unit: '', rate_paise: rate });
+  }
+  if (!items.length) return show('Add at least one item');
+  if (purchaseTotal() <= 0) return show('The total must be more than zero');
+  const btn = document.getElementById('pu-save'); btn.disabled = true;
+  try {
+    const r = await api('POST', '/purchases', { date: document.getElementById('pu-date').value, category: document.getElementById('pu-cat').value,
+      vendor: document.getElementById('pu-vendor').value, bill_no: document.getElementById('pu-bill').value,
+      mode: document.getElementById('pu-mode').value, note: document.getElementById('pu-note').value, items });
+    toast(r.moved_to_date ? `Purchase saved on ${fmtDate(r.moved_to_date)} (that day's cash was already closed)` : `Purchase saved: ${rupees(r.total_paise)}`, 'success', 5000);
+    renderPage('purchases');
+  } catch (ex) { show(ex.message); btn.disabled = false; }
+}
+
+// ── Staff salary ──────────────────────────────────────────────
+const STAFF_ROLES = ['Manager', 'Warden', 'Receptionist', 'Cook', 'Cleaner', 'Security guard', 'Electrician / maintenance', 'Other'];
+function salaryBalance(b) {
+  if (b > 0) return `<span class="chip chip-danger">You owe ${rupees(b)}</span>`;
+  if (b < 0) return `<span class="chip chip-warning">Advance given ${rupees(-b)}</span>`;
+  return '<span class="chip chip-success">Settled</span>';
+}
+async function renderSalary(el) {
+  const d = await api('GET', '/payroll/staff');
+  document.getElementById('header-actions').innerHTML = `<button class="btn btn-primary btn-sm" onclick="showStaffModal()">+ Add staff</button>`;
+  el.innerHTML = `
+    <div class="stat-grid mb-20">
+      <div class="stat-card accent"><div class="stat-label">Monthly salaries</div><div class="stat-value" style="font-size:20px">${rupees(d.totals.monthly)}</div><div class="stat-sub">current staff</div></div>
+      <div class="stat-card danger"><div class="stat-label">You owe staff</div><div class="stat-value" style="font-size:20px">${rupees(d.totals.owed)}</div></div>
+      <div class="stat-card warning"><div class="stat-label">Advances given</div><div class="stat-value" style="font-size:20px">${rupees(d.totals.advance)}</div></div>
+    </div>
+    <div class="card">
+      ${d.staff.length ? `<div class="list">${d.staff.map(s => `
+        <div class="list-row ${s.active ? '' : 'is-muted'}">
+          <div class="avatar">${h(initials(s.name))}</div>
+          <div class="list-main"><div class="list-title">${h(s.name)}${s.active ? '' : ' <span class="badge badge-gray">left</span>'}</div>
+            <div class="list-sub">${h(s.designation || 'Staff')} · ${rupees(s.monthly_salary_paise)}/month</div>
+            <div class="mt-4">${salaryBalance(s.balance_paise)}</div></div>
+          <div class="list-end">
+            <button class="btn btn-primary btn-sm" onclick="showPaySalary('${h(s.id)}','${h(s.name)}',${s.monthly_salary_paise})">Pay</button>
+            <button class="btn btn-ghost btn-sm" onclick="showStaffDetail('${h(s.id)}')">Details</button></div>
+        </div>`).join('')}</div>`
+      : `<div class="empty-state"><p>Add your staff (manager, cook, cleaner...) with their monthly salary. Then record what you pay them; DormBook keeps track of advances and what you still owe.</p>
+          <button class="btn btn-primary mt-12" onclick="showStaffModal()">+ Add staff</button></div>`}
+    </div>`;
+}
+function showStaffModal() {
+  const t = todayIST();
+  openModal('Add staff', `
+    <div class="field"><label for="sf-name">Name *</label><input id="sf-name" maxlength="80" /></div>
+    <div class="field-row">
+      <div class="field"><label for="sf-role">Work</label><select id="sf-role">${STAFF_ROLES.map(r => `<option>${h(r)}</option>`).join('')}</select></div>
+      <div class="field"><label for="sf-mobile">Mobile (optional)</label><input id="sf-mobile" type="tel" maxlength="13" inputmode="numeric" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label for="sf-salary">Monthly salary (₹) *</label><input id="sf-salary" type="number" min="0" step="1" inputmode="numeric" /></div>
+      <div class="field"><label for="sf-joined">Joined on</label><input id="sf-joined" type="date" value="${t}" max="${t}" /></div>
+    </div>
+    <div class="field-note">If they joined mid-month, the first month's salary is worked out for the days worked.</div>
+    <div id="sf-error" class="error-msg hidden"></div>
+    <div class="btn-group mt-12"><button class="btn btn-primary" id="sf-btn" onclick="submitStaff()">Save</button><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
+}
+async function submitStaff() {
+  const err = document.getElementById('sf-error'); err.classList.add('hidden');
+  const salary = Math.round(parseFloat(document.getElementById('sf-salary').value) * 100);
+  const name = document.getElementById('sf-name').value.trim();
+  if (!name) { err.textContent = 'Write the name'; err.classList.remove('hidden'); return; }
+  if (!Number.isFinite(salary) || salary < 0) { err.textContent = 'Type the monthly salary'; err.classList.remove('hidden'); return; }
+  const btn = document.getElementById('sf-btn'); btn.disabled = true;
+  try {
+    await api('POST', '/payroll/staff', { name, designation: document.getElementById('sf-role').value, mobile: document.getElementById('sf-mobile').value,
+      monthly_salary_paise: salary, joined_on: document.getElementById('sf-joined').value });
+    closeModal(); toast(`${name} added`, 'success'); renderPage('salary');
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+}
+function showPaySalary(id, name, monthly) {
+  const t = todayIST();
+  openModal(`Pay salary: ${name}`, `
+    <div class="field-row">
+      <div class="field"><label for="sp-amount">Amount (₹) *</label><input id="sp-amount" type="number" min="1" step="1" inputmode="numeric" value="${monthly ? monthly / 100 : ''}" /></div>
+      <div class="field"><label for="sp-month">For month</label><input id="sp-month" type="month" value="${t.slice(0, 7)}" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label for="sp-mode">Paid by</label><select id="sp-mode"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option></select></div>
+      <div class="field"><label for="sp-date">Date paid</label><input id="sp-date" type="date" value="${t}" max="${t}" /></div>
+    </div>
+    <div class="field"><label for="sp-note">Note</label><input id="sp-note" maxlength="300" placeholder="e.g. Salary + advance for festival" /></div>
+    <div class="field-note">Paying more than the salary is saved as an advance; paying less leaves the rest as owed. Both carry over to the next month.</div>
+    <div id="sp-error" class="error-msg hidden"></div>
+    <div class="btn-group mt-12"><button class="btn btn-primary" id="sp-btn" onclick="submitPaySalary('${h(id)}')">Save payment</button><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
+}
+async function submitPaySalary(id) {
+  const err = document.getElementById('sp-error'); err.classList.add('hidden');
+  const amt = Math.round(parseFloat(document.getElementById('sp-amount').value) * 100);
+  if (!Number.isFinite(amt) || amt <= 0) { err.textContent = 'Type an amount more than zero'; err.classList.remove('hidden'); return; }
+  const btn = document.getElementById('sp-btn'); btn.disabled = true;
+  try {
+    const r = await api('POST', `/payroll/staff/${encodeURIComponent(id)}/pay`, { amount_paise: amt, month: document.getElementById('sp-month').value,
+      mode: document.getElementById('sp-mode').value, date: document.getElementById('sp-date').value, note: document.getElementById('sp-note').value });
+    closeModal();
+    const b = r.balance_paise;
+    toast(`Saved. ${b > 0 ? `You still owe ${rupees(b)}` : b < 0 ? `Advance given: ${rupees(-b)}` : 'Salary settled'}`, 'success', 5000);
+    renderPage('salary');
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+}
+function monthLabel(ym) { const [y, m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-IN', { month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+async function showStaffDetail(id) {
+  let d;
+  try { d = await api('GET', `/payroll/staff/${encodeURIComponent(id)}`); } catch (ex) { toast(ex.message, 'error'); return; }
+  const s = d.staff, t = todayIST();
+  openModal(`${s.name}${s.designation ? ` · ${s.designation}` : ''}`, `
+    <div class="mb-12">${salaryBalance(d.balance_paise)} <span class="td-small">Salary due so far ${rupees(d.due_paise)} · paid ${rupees(d.paid_paise)}</span></div>
+    <div class="table-wrap"><table class="report-table">
+      <thead><tr><th>Month</th><th class="num">Salary</th><th class="num">Paid</th><th class="num">Balance</th></tr></thead>
+      <tbody>${d.statement.map(m => `<tr><td>${monthLabel(m.month)}${m.note ? `<div class="td-small">${h(m.note)}</div>` : ''}</td>
+        <td class="num">${rupees(m.salary_paise)}</td><td class="num">${rupees(m.paid_paise)}</td>
+        <td class="num">${m.balance_paise > 0 ? `<span class="text-danger">owe ${rupees(m.balance_paise)}</span>` : m.balance_paise < 0 ? `<span class="text-warning">adv ${rupees(-m.balance_paise)}</span>` : '—'}</td></tr>`).join('')
+        || '<tr><td colspan="4" class="td-small text-muted">Nothing yet</td></tr>'}</tbody>
+    </table></div>
+    <strong class="mt-12" style="display:block">Payments</strong>
+    ${d.payments.length ? `<div class="list mt-8">${d.payments.map(p => `<div class="list-row ${p.is_reversed || p.is_reversal ? 'is-muted' : ''}">
+      <div class="list-main"><div class="list-title">${rupees(p.amount)} for ${p.month ? monthLabel(p.month) : '—'}${p.is_reversal ? ' <span class="badge badge-gray">reversal</span>' : ''}${p.is_reversed ? ' <span class="badge badge-gray">undone</span>' : ''}</div>
+        <div class="list-sub">${fmtDate(p.date)} · ${h(p.mode)}${p.note ? ` · ${h(p.note)}` : ''}</div></div>
+      <div class="list-end">${!p.is_reversed && !p.is_reversal ? `<button class="btn btn-ghost btn-sm" onclick="undoLedger('${h(p.id)}','salary')">Undo</button>` : ''}</div></div>`).join('')}</div>`
+      : '<p class="td-small text-muted mt-8">No payments yet.</p>'}
+    <details class="card mt-12"><summary><strong>Change salary</strong></summary>
+      <div class="field-row mt-12">
+        <div class="field"><label for="sc-amount">New monthly salary (₹)</label><input id="sc-amount" type="number" min="0" step="1" inputmode="numeric" /></div>
+        <div class="field"><label for="sc-from">From month</label><input id="sc-from" type="month" value="${t.slice(0, 7)}" min="${s.joined_on.slice(0, 7)}" /></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="submitSalaryChange('${h(s.id)}')">Save new salary</button>
+    </details>
+    <details class="card mt-12"><summary><strong>${s.left_on ? `Left on ${fmtDate(s.left_on)}` : 'Staff has left'}</strong></summary>
+      <div class="field mt-12"><label for="sl-date">Last working day</label><input id="sl-date" type="date" value="${s.left_on || t}" min="${s.joined_on}" /></div>
+      <p class="td-small">Salary stops after this day (the last month is paid for the days worked).</p>
+      <div class="btn-group"><button class="btn btn-danger btn-sm" onclick="submitStaffLeft('${h(s.id)}', false)">Save leaving date</button>
+      ${s.left_on ? `<button class="btn btn-outline btn-sm" onclick="submitStaffLeft('${h(s.id)}', true)">Still working here</button>` : ''}</div>
+    </details>
+    <div id="sd-error" class="error-msg hidden"></div>`, { wide: true });
+}
+async function submitSalaryChange(id) {
+  const err = document.getElementById('sd-error'); err.classList.add('hidden');
+  const amt = Math.round(parseFloat(document.getElementById('sc-amount').value) * 100);
+  if (!Number.isFinite(amt) || amt < 0) { err.textContent = 'Type the new monthly salary'; err.classList.remove('hidden'); return; }
+  try {
+    await api('POST', `/payroll/staff/${encodeURIComponent(id)}/salary`, { monthly_salary_paise: amt, from_month: document.getElementById('sc-from').value });
+    toast('Salary updated', 'success'); showStaffDetail(id); renderPage('salary');
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+async function submitStaffLeft(id, undo) {
+  const err = document.getElementById('sd-error'); err.classList.add('hidden');
+  try {
+    await api('PATCH', `/payroll/staff/${encodeURIComponent(id)}`, { left_on: undo ? null : document.getElementById('sl-date').value });
+    toast(undo ? 'Marked as still working' : 'Leaving date saved', 'success'); showStaffDetail(id); renderPage('salary');
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+}
+/** Undo a salary payment or a purchase: adds a reversal (history is kept). Owner only. */
+function undoLedger(id, what) {
+  openModal(`Undo this ${what === 'salary' ? 'salary payment' : 'purchase'}?`, `
+    <p class="td-small">It stays in the history and a matching reversal is added today.</p>
+    <div class="field mt-12"><label for="ul-reason">Why? (required)</label><input id="ul-reason" maxlength="300" placeholder="e.g. Entered twice" /></div>
+    <div id="ul-error" class="error-msg hidden"></div>
+    <div class="btn-group mt-12"><button class="btn btn-danger" id="ul-btn">Undo</button><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
+  document.getElementById('ul-btn').addEventListener('click', async () => {
+    const err = document.getElementById('ul-error'); err.classList.add('hidden');
+    const reason = document.getElementById('ul-reason').value.trim();
+    if (!reason) { err.textContent = 'Write why you are undoing it'; err.classList.remove('hidden'); return; }
+    const btn = document.getElementById('ul-btn'); btn.disabled = true;
+    try { await api('POST', `/ledger/entries/${encodeURIComponent(id)}/reverse`, { reason }); closeModal(); toast('Undone', 'success'); refreshCurrentPage(); }
+    catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+  });
+}
+
+// ── Accounts (books built from the money ledger) ─────────────
+// Day Book, Ledgers, Trial Balance, Profit & Loss and Balance Sheet read from
+// /accounts/*. "Record money" posts owner money in / out, other income and
+// cash ↔ bank moves into the same protected ledger (owner only).
+const ACC_TYPES = {
+  owner_in:     { label: 'Owner put money in',     mode: true,  hint: 'Money you add to the business: to start, to buy something, or to cover a shortfall.' },
+  owner_out:    { label: 'Owner took money out',   mode: true,  hint: 'Money you take for personal use (drawings). It is not a business expense.' },
+  other_income: { label: 'Other income',           mode: true,  hint: 'Income not from a guest: scrap sale, parking, interest. Write what it is for.' },
+  to_bank:      { label: 'Cash deposited in bank', mode: false, hint: 'Cash moves from the drawer to the bank. Cash close counts it as cash out.' },
+  from_bank:    { label: 'Cash withdrawn from bank', mode: false, hint: 'Cash moves from the bank to the drawer. Cash close counts it as cash in.' },
+};
+function accBal(v) { return v === 0 ? rupees(0) : `${rupees(Math.abs(v))} ${v > 0 ? 'Dr' : 'Cr'}`; }
+function accFYStart(d) { const [y, m] = d.split('-').map(Number); return `${m >= 4 ? y : y - 1}-04-01`; }
+async function accCompany() {
+  const p = await getProfile().catch(() => ({}));
+  return { business_name: p.business_name || '', property_name: p.property_name || '', phone: p.phone || '', email: p.email || '',
+    gstin: p.gstin || '', address: [p.address, p.city, p.state, p.pincode].filter(Boolean).join(', ') };
+}
+function accSetRange(which) {
+  const t = todayIST(), st = STATE.acc;
+  if (which === 'month') { st.from = t.slice(0, 8) + '01'; st.to = t; }
+  else if (which === 'last') { const d = new Date(Date.parse(t.slice(0, 8) + '01') - 86400000).toISOString().slice(0, 10); st.from = d.slice(0, 8) + '01'; st.to = d; }
+  else if (which === 'fy') { st.from = accFYStart(t); st.to = t; }
+  else if (which === 'today') { st.from = t; st.to = t; }
+  refreshCurrentPage();
+}
+function accBar({ asOf = false } = {}) {
+  const st = STATE.acc;
+  return `
+    <div class="report-bar no-print">
+      ${asOf ? '' : `<div class="field"><label for="acc-from">From</label><input id="acc-from" type="date" value="${st.from}" max="${todayIST()}" /></div>`}
+      <div class="field"><label for="acc-to">${asOf ? 'As on' : 'To'}</label><input id="acc-to" type="date" value="${st.to}" max="${todayIST()}" /></div>
+      <div class="btn-group">
+        ${asOf ? `<button class="btn btn-outline btn-sm" onclick="accSetRange('today')">Today</button>` : `<button class="btn btn-outline btn-sm" onclick="accSetRange('month')">This month</button>
+        <button class="btn btn-outline btn-sm" onclick="accSetRange('last')">Last month</button>`}
+        <button class="btn btn-outline btn-sm" onclick="accSetRange('fy')">This financial year</button>
+        <button class="btn btn-primary btn-sm" onclick="window.print()">🖨 Print / Save PDF</button>
+      </div>
+    </div>`;
+}
+function accWireBar() {
+  const st = STATE.acc;
+  const f = document.getElementById('acc-from'), t = document.getElementById('acc-to');
+  const go = () => {
+    if (f && f.value) st.from = f.value;
+    if (t && t.value) st.to = t.value;
+    if (st.from > st.to) { toast('"From" must be on or before "To"', 'warning'); return; }
+    refreshCurrentPage();
+  };
+  if (f) f.addEventListener('change', go);
+  if (t) t.addEventListener('change', go);
+}
+function accPeriod(st, asOf) { return asOf ? `As on ${fmtDate(st.to)}` : `${fmtDate(st.from)} to ${fmtDate(st.to)}`; }
+const accCheck = (ok) => ok
+  ? '<span class="badge badge-success">✓ Balanced</span>'
+  : '<span class="badge badge-danger">✗ Not balanced: tell support</span>';
+
+async function renderAccounts(el, page) {
+  const t = todayIST();
+  STATE.acc = STATE.acc || { from: t.slice(0, 8) + '01', to: t, account: 'cash' };
+  const st = STATE.acc;
+  if (st.to > t) st.to = t;
+  const q = `from=${st.from}&to=${st.to}`;
+  const c = await accCompany();
+
+  if (page === 'acc_entries') {
+    const d = await api('GET', `/accounts/entries?${q}`);
+    const owner = STATE.user && STATE.user.role === 'owner';
+    el.innerHTML = `
+      ${owner ? `<div class="card mb-20 no-print">
+        <strong>Record money</strong>
+        <p class="td-small mt-4">For money that is not from a guest. Guest payments, deposits and expenses have their own screens.</p>
+        <div class="field mt-12"><label for="ae-type">What happened?</label>
+          <select id="ae-type">${Object.entries(ACC_TYPES).map(([k, v]) => `<option value="${k}">${h(v.label)}</option>`).join('')}</select>
+          <div class="field-note" id="ae-hint"></div></div>
+        <div class="field-row">
+          <div class="field"><label for="ae-amount">Amount (₹)</label><input id="ae-amount" type="number" min="1" step="0.01" inputmode="decimal" placeholder="0" /></div>
+          <div class="field" id="ae-mode-box"><label for="ae-mode">Paid by</label>
+            <select id="ae-mode"><option value="cash">Cash</option><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option></select></div>
+          <div class="field"><label for="ae-date">Date</label><input id="ae-date" type="date" value="${t}" max="${t}" /></div>
+        </div>
+        <label class="switch-row" id="ae-opening-box"><input type="checkbox" id="ae-opening" />
+          <span><strong>This is an opening balance</strong><br/><span class="td-small">Money that was already in the bank (or with you) when you started using DormBook.
+          The cash in your drawer on day one is taken from your first cash close, so don't add it here.</span></span></label>
+        <div class="field"><label for="ae-note">Note</label><input id="ae-note" maxlength="300" placeholder="e.g. Scrap sale, cash for change" /></div>
+        <div id="ae-error" class="error-msg hidden"></div>
+        <button class="btn btn-primary" id="ae-save" onclick="submitAccEntry()">Save</button>
+      </div>` : `<div class="card mb-20 td-small">Only the owner can record owner money, other income and bank transfers. You can see them below.</div>`}
+      ${accBar()}
+      <article class="report-doc">
+        ${letterhead(c, 'Owner & Bank Entries', accPeriod(st))}
+        ${d.rows.length ? `<div class="table-wrap"><table class="report-table">
+          <thead><tr><th>Date</th><th>Entry</th><th>How</th><th>Note</th><th>By</th><th class="num">Amount</th>${owner ? '<th class="no-print"></th>' : ''}</tr></thead>
+          <tbody>${d.rows.map(r => `<tr class="${r.is_reversed || r.is_reversal ? 'text-muted' : ''}">
+            <td>${fmtDate(r.date)}</td><td>${h(r.label)}${r.is_reversal ? ' <span class="badge badge-gray">reversal</span>' : ''}${r.is_reversed ? ' <span class="badge badge-gray">reversed</span>' : ''}</td>
+            <td>${h(r.mode)}</td><td>${h(r.note)}</td><td>${h(r.staff)}</td><td class="num">${rupees(r.amount)}</td>
+            ${owner ? `<td class="no-print">${!r.is_reversed && !r.is_reversal ? `<button class="btn btn-outline btn-sm" onclick="reverseAccEntry('${h(r.id)}')">Undo</button>` : ''}</td>` : ''}
+          </tr>`).join('')}</tbody></table></div>` : '<p class="td-small text-muted mt-12">No owner or bank entries in this period.</p>'}
+      </article>`;
+    accWireBar();
+    if (owner) {
+      const type = document.getElementById('ae-type');
+      const sync = () => {
+        const cfg = ACC_TYPES[type.value];
+        document.getElementById('ae-hint').textContent = cfg.hint;
+        document.getElementById('ae-mode-box').hidden = !cfg.mode;
+        document.getElementById('ae-opening-box').hidden = type.value !== 'owner_in';
+        if (type.value !== 'owner_in') document.getElementById('ae-opening').checked = false;
+      };
+      type.addEventListener('change', sync);
+      sync();
+    }
+    return;
+  }
+
+  if (page === 'acc_daybook') {
+    const d = await api('GET', `/accounts/day-book?${q}`);
+    el.innerHTML = `${accBar()}
+      <article class="report-doc">
+        ${letterhead(c, 'Day Book', accPeriod(st))}
+        ${d.rows.length ? `<div class="table-wrap"><table class="report-table">
+          <thead><tr><th>Date</th><th>Particulars</th><th>Debit (Dr)</th><th>Credit (Cr)</th><th class="num">Amount</th></tr></thead>
+          <tbody>${d.rows.map(r => `<tr${r.reversal ? ' class="text-muted"' : ''}>
+            <td>${fmtDate(r.date)}</td>
+            <td><b>${h(r.label)}</b>${r.who ? `<div class="td-small">${h(r.who)}</div>` : ''}${r.note ? `<div class="td-small">${h(r.note)}</div>` : ''}</td>
+            <td>${r.debit.map(x => `<div>${h(x.account)}${r.debit.length > 1 ? ` <span class="td-small">${rupees(x.amount)}</span>` : ''}</div>`).join('')}</td>
+            <td>${r.credit.map(x => `<div>${h(x.account)}${r.credit.length > 1 ? ` <span class="td-small">${rupees(x.amount)}</span>` : ''}</div>`).join('')}</td>
+            <td class="num">${rupees(r.total)}</td></tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="4"><b>Total</b></td><td class="num"><b>${rupees(d.total)}</b></td></tr></tfoot></table></div>`
+          : '<p class="td-small text-muted mt-12">No entries in this period.</p>'}
+        <p class="td-small mt-12">Every line has equal debit and credit. Negative amounts are reversals (corrections).</p>
+      </article>`;
+    accWireBar();
+    return;
+  }
+
+  if (page === 'acc_ledger') {
+    const chart = await api('GET', '/accounts/chart');
+    if (!chart.find(a => a.key === st.account)) st.account = chart[0] ? chart[0].key : 'cash';
+    const d = await api('GET', `/accounts/ledger?account=${encodeURIComponent(st.account)}&${q}`);
+    const groups = {};
+    chart.forEach(a => { (groups[a.type_label] = groups[a.type_label] || []).push(a); });
+    el.innerHTML = `
+      <div class="report-bar no-print"><div class="field" style="min-width:240px"><label for="acc-account">Account</label>
+        <select id="acc-account">${Object.entries(groups).map(([g, list]) => `<optgroup label="${h(g)}">${list.map(a =>
+          `<option value="${h(a.key)}" ${a.key === st.account ? 'selected' : ''}>${h(a.name)}</option>`).join('')}</optgroup>`).join('')}</select></div></div>
+      ${accBar()}
+      <article class="report-doc">
+        ${letterhead(c, `Ledger: ${d.account.name}`, accPeriod(st))}
+        <div class="table-wrap"><table class="report-table">
+          <thead><tr><th>Date</th><th>Particulars</th><th>Against</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+          <tbody>
+            <tr><td>${fmtDate(st.from)}</td><td><b>Opening balance</b></td><td></td><td></td><td></td><td class="num"><b>${accBal(d.opening)}</b></td></tr>
+            ${d.rows.map(r => `<tr${r.reversal ? ' class="text-muted"' : ''}><td>${fmtDate(r.date)}</td>
+              <td>${h(r.label)}${r.who ? `<div class="td-small">${h(r.who)}</div>` : ''}${r.note ? `<div class="td-small">${h(r.note)}</div>` : ''}</td>
+              <td class="td-small">${h(r.against)}</td>
+              <td class="num">${r.debit ? rupees(r.debit) : ''}</td><td class="num">${r.credit ? rupees(r.credit) : ''}</td>
+              <td class="num">${accBal(r.balance)}</td></tr>`).join('')}
+          </tbody>
+          <tfoot><tr><td colspan="3"><b>Closing balance</b></td><td class="num"><b>${rupees(d.total_debit)}</b></td>
+            <td class="num"><b>${rupees(d.total_credit)}</b></td><td class="num"><b>${accBal(d.closing)}</b></td></tr></tfoot>
+        </table></div>
+        <p class="td-small mt-12">Dr = debit, Cr = credit. For cash, bank and guests, a Dr balance is money you have or are owed.</p>
+      </article>`;
+    document.getElementById('acc-account').addEventListener('change', (e) => { st.account = e.target.value; refreshCurrentPage(); });
+    accWireBar();
+    return;
+  }
+
+  if (page === 'acc_tb') {
+    const d = await api('GET', `/accounts/trial-balance?to=${st.to}`);
+    let lastType = '';
+    el.innerHTML = `${accBar({ asOf: true })}
+      <article class="report-doc">
+        ${letterhead(c, 'Trial Balance', accPeriod(st, true))}
+        <p class="mb-12">${accCheck(d.balanced)}</p>
+        <div class="table-wrap"><table class="report-table">
+          <thead><tr><th>Account</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+          <tbody>${d.rows.map(r => { const head = r.type_label !== lastType ? `<tr class="group-row"><td colspan="3"><b>${h(r.type_label)}</b></td></tr>` : ''; lastType = r.type_label;
+            return `${head}<tr><td>${h(r.name)}</td><td class="num">${r.debit ? rupees(r.debit) : ''}</td><td class="num">${r.credit ? rupees(r.credit) : ''}</td></tr>`; }).join('')}</tbody>
+          <tfoot><tr><td><b>Total</b></td><td class="num"><b>${rupees(d.total_debit)}</b></td><td class="num"><b>${rupees(d.total_credit)}</b></td></tr></tfoot>
+        </table></div>
+      </article>`;
+    accWireBar();
+    return;
+  }
+
+  if (page === 'acc_pl') {
+    const d = await api('GET', `/accounts/profit-loss?${q}`);
+    const list = (rows) => rows.length ? rows.map(r => `<tr><td>${h(r.name)}</td><td class="num">${rupees(r.amount)}</td></tr>`).join('')
+      : '<tr><td colspan="2" class="td-small text-muted">Nothing in this period</td></tr>';
+    el.innerHTML = `${accBar()}
+      <article class="report-doc">
+        ${letterhead(c, 'Profit & Loss', accPeriod(st))}
+        <div class="table-wrap"><table class="report-table">
+          <tbody>
+            <tr class="group-row"><td colspan="2"><b>Income</b></td></tr>${list(d.income)}
+            <tr><td><b>Total income</b></td><td class="num"><b>${rupees(d.total_income)}</b></td></tr>
+            <tr class="group-row"><td colspan="2"><b>Expenses</b></td></tr>${list(d.expenses)}
+            <tr><td><b>Total expenses</b></td><td class="num"><b>${rupees(d.total_expenses)}</b></td></tr>
+          </tbody>
+          <tfoot><tr><td><b>${d.profit >= 0 ? 'Net profit' : 'Net loss'}</b></td>
+            <td class="num"><b class="${d.profit >= 0 ? 'text-success' : 'text-danger'}">${rupees(Math.abs(d.profit))}</b></td></tr></tfoot>
+        </table></div>
+        <p class="td-small mt-12">${h(d.note)} The Monthly Summary in Reports counts money when it is received, so its numbers can differ.</p>
+      </article>`;
+    accWireBar();
+    return;
+  }
+
+  if (page === 'acc_bs') {
+    const d = await api('GET', `/accounts/balance-sheet?to=${st.to}`);
+    const rows = (xs) => xs.map(x => `<tr><td>${h(x.name)}</td><td class="num">${rupees(x.amount)}</td></tr>`).join('');
+    el.innerHTML = `${accBar({ asOf: true })}
+      ${d.warnings.map(w => `<div class="warn-banner no-print mb-12">${h(w)}</div>`).join('')}
+      <article class="report-doc">
+        ${letterhead(c, 'Balance Sheet', accPeriod(st, true))}
+        <p class="mb-12">${accCheck(d.balanced)}</p>
+        <div class="bs-grid">
+          <div class="table-wrap"><table class="report-table">
+            <thead><tr><th>What the business has</th><th class="num">Amount</th></tr></thead>
+            <tbody><tr class="group-row"><td colspan="2"><b>Assets</b></td></tr>${rows(d.assets)}</tbody>
+            <tfoot><tr><td><b>Total</b></td><td class="num"><b>${rupees(d.total_assets)}</b></td></tr></tfoot>
+          </table></div>
+          <div class="table-wrap"><table class="report-table">
+            <thead><tr><th>What the business owes</th><th class="num">Amount</th></tr></thead>
+            <tbody><tr class="group-row"><td colspan="2"><b>Liabilities</b></td></tr>${rows(d.liabilities)}
+              <tr><td><b>Total liabilities</b></td><td class="num"><b>${rupees(d.total_liabilities)}</b></td></tr>
+              <tr class="group-row"><td colspan="2"><b>Owner's equity</b></td></tr>${rows(d.equity)}
+              <tr><td><b>Total equity</b></td><td class="num"><b>${rupees(d.total_equity)}</b></td></tr></tbody>
+            <tfoot><tr><td><b>Total</b></td><td class="num"><b>${rupees(d.total_liabilities + d.total_equity)}</b></td></tr></tfoot>
+          </table></div>
+        </div>
+      </article>`;
+    accWireBar();
+  }
+}
+
+async function submitAccEntry() {
+  const err = document.getElementById('ae-error'); err.classList.add('hidden');
+  const btn = document.getElementById('ae-save');
+  const type = document.getElementById('ae-type').value;
+  const amt = Math.round(parseFloat(document.getElementById('ae-amount').value) * 100);
+  const note = document.getElementById('ae-note').value.trim();
+  const date = document.getElementById('ae-date').value;
+  const show = (m) => { err.textContent = m; err.classList.remove('hidden'); };
+  if (!Number.isFinite(amt) || amt <= 0) return show('Type an amount more than zero');
+  if (type === 'other_income' && !note) return show('Write what this income is for');
+  if (!date || date > todayIST()) return show('Choose a date that is today or earlier');
+  const body = { type, amount_paise: amt, date, note };
+  if (ACC_TYPES[type].mode) body.mode = document.getElementById('ae-mode').value;
+  if (type === 'owner_in' && document.getElementById('ae-opening').checked) body.opening = true;
+  btn.disabled = true;
+  try {
+    const r = await api('POST', '/accounts/entries', body);
+    toast(r.moved_to_date ? `Saved on ${fmtDate(r.moved_to_date)}: the earlier day's cash is already closed` : `Saved: ${ACC_TYPES[type].label} ${rupees(amt)}`, 'success', 5000);
+    refreshCurrentPage();
+  } catch (ex) { show(ex.message); btn.disabled = false; }
+}
+
+function reverseAccEntry(id) {
+  openModal('Undo this entry?', `
+    <p class="td-small">The entry stays in the books and a matching reversal is added today, so the history is never lost.</p>
+    <div class="field mt-12"><label for="ar-reason">Why? (required)</label><input id="ar-reason" maxlength="300" placeholder="e.g. Entered twice" /></div>
+    <div id="ar-error" class="error-msg hidden"></div>
+    <div class="btn-group mt-12"><button class="btn btn-danger" id="ar-btn" onclick="confirmReverseAccEntry('${h(id)}')">Undo entry</button>
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>`);
+}
+async function confirmReverseAccEntry(id) {
+  const err = document.getElementById('ar-error'); err.classList.add('hidden');
+  const reason = document.getElementById('ar-reason').value.trim();
+  if (!reason) { err.textContent = 'Write why you are undoing it'; err.classList.remove('hidden'); return; }
+  const btn = document.getElementById('ar-btn'); btn.disabled = true;
+  try {
+    await api('POST', `/ledger/entries/${encodeURIComponent(id)}/reverse`, { reason });
+    closeModal(); toast('Entry undone', 'success'); refreshCurrentPage();
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+}
 
 // ── Android app (Capacitor) hardware back button ─────────────
 // Only runs inside the DormBook Android app; a normal browser has no
