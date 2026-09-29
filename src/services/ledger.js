@@ -32,7 +32,16 @@ class LedgerError extends Error {
 
 const MODES = ['cash', 'upi', 'card', 'bank_transfer'];
 const KINDS = ['CHARGE', 'PAYMENT', 'WAIVER', 'DEPOSIT_IN', 'DEPOSIT_APPLY', 'DEPOSIT_REFUND', 'EXPENSE',
-  'BANK_DEPOSIT', 'OPENING_DUES', 'OPENING_DEPOSIT', 'CREDIT_REFUND'];
+  'BANK_DEPOSIT', 'OPENING_DUES', 'OPENING_DEPOSIT', 'CREDIT_REFUND',
+  // Owner / business entries not linked to a guest (Accounts → Record money):
+  'OWNER_IN',       // owner puts money into the business (capital, opening balance)
+  'OWNER_OUT',      // owner takes money out (drawings)
+  'OTHER_INCOME',   // income not from a guest (scrap sale, parking, interest, ...)
+  'BANK_WITHDRAW',  // cash taken out of the bank into the drawer (BANK_DEPOSIT is the reverse)
+  'SALARY',         // salary paid to a staff member (source_id = payroll_staff.id, period_start = month)
+  'PURCHASE'];      // goods bought (source_id = purchases.id)
+// Kinds that never belong to a guest.
+const BUSINESS_KINDS = ['EXPENSE', 'BANK_DEPOSIT', 'OWNER_IN', 'OWNER_OUT', 'OTHER_INCOME', 'BANK_WITHDRAW', 'SALARY', 'PURCHASE'];
 const PLANS = ['daily', 'weekly', 'monthly'];
 
 // Signed sums — reversals are negative rows, so they net out automatically.
@@ -44,8 +53,9 @@ const SQL = {
   deposit: `COALESCE(SUM(CASE WHEN kind IN ('DEPOSIT_IN','OPENING_DEPOSIT') THEN amount_paise
                               WHEN kind IN ('DEPOSIT_APPLY','DEPOSIT_REFUND') THEN -amount_paise
                               ELSE 0 END),0)`,
-  cashIn: `COALESCE(SUM(CASE WHEN kind IN ('PAYMENT','DEPOSIT_IN') AND mode='cash' THEN amount_paise ELSE 0 END),0)`,
-  cashOut: `COALESCE(SUM(CASE WHEN kind IN ('EXPENSE','DEPOSIT_REFUND','CREDIT_REFUND') AND mode='cash' THEN amount_paise
+  cashIn: `COALESCE(SUM(CASE WHEN kind IN ('PAYMENT','DEPOSIT_IN','OWNER_IN','OTHER_INCOME') AND mode='cash' THEN amount_paise
+                             WHEN kind = 'BANK_WITHDRAW' THEN amount_paise ELSE 0 END),0)`,
+  cashOut: `COALESCE(SUM(CASE WHEN kind IN ('EXPENSE','DEPOSIT_REFUND','CREDIT_REFUND','OWNER_OUT','SALARY','PURCHASE') AND mode='cash' THEN amount_paise
                               WHEN kind = 'BANK_DEPOSIT' THEN amount_paise ELSE 0 END),0)`,
   // rows that are not reversed and are not reversals
   live: `reversal_of IS NULL AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reversal_of = ledger_entries.id)`,
@@ -63,7 +73,8 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   ref_date      TEXT NOT NULL CHECK (ref_date GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]'),
   created_at    TEXT NOT NULL,
   kind          TEXT NOT NULL CHECK (kind IN ('CHARGE','PAYMENT','WAIVER','DEPOSIT_IN','DEPOSIT_APPLY',
-                  'DEPOSIT_REFUND','EXPENSE','BANK_DEPOSIT','OPENING_DUES','OPENING_DEPOSIT','CREDIT_REFUND')),
+                  'DEPOSIT_REFUND','EXPENSE','BANK_DEPOSIT','OPENING_DUES','OPENING_DEPOSIT','CREDIT_REFUND',
+                  'OWNER_IN','OWNER_OUT','OTHER_INCOME','BANK_WITHDRAW','SALARY','PURCHASE')),
   category      TEXT,
   mode          TEXT CHECK (mode IS NULL OR mode IN ('cash','upi','card','bank_transfer')),
   amount_paise  INTEGER NOT NULL CHECK (typeof(amount_paise) = 'integer' AND amount_paise <> 0),
@@ -81,9 +92,9 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   tax_rate_bp   INTEGER,
   tax_paise     INTEGER,
   CHECK ((reversal_of IS NULL AND amount_paise > 0) OR (reversal_of IS NOT NULL AND amount_paise < 0)),
-  CHECK (kind NOT IN ('PAYMENT','DEPOSIT_IN','DEPOSIT_REFUND','EXPENSE','CREDIT_REFUND') OR mode IS NOT NULL),
-  CHECK (kind IN ('EXPENSE','BANK_DEPOSIT') OR resident_id IS NOT NULL),
-  CHECK (kind NOT IN ('EXPENSE','BANK_DEPOSIT') OR resident_id IS NULL),
+  CHECK (kind NOT IN ('PAYMENT','DEPOSIT_IN','DEPOSIT_REFUND','EXPENSE','CREDIT_REFUND','OWNER_IN','OWNER_OUT','OTHER_INCOME','SALARY','PURCHASE') OR mode IS NOT NULL),
+  CHECK (kind IN ('EXPENSE','BANK_DEPOSIT','OWNER_IN','OWNER_OUT','OTHER_INCOME','BANK_WITHDRAW','SALARY','PURCHASE') OR resident_id IS NOT NULL),
+  CHECK (kind NOT IN ('EXPENSE','BANK_DEPOSIT','OWNER_IN','OWNER_OUT','OTHER_INCOME','BANK_WITHDRAW','SALARY','PURCHASE') OR resident_id IS NULL),
   CHECK (kind NOT IN ('WAIVER','DEPOSIT_APPLY') OR length(trim(coalesce(reason,''))) > 0),
   CHECK (reversal_of IS NULL OR length(trim(coalesce(reason,''))) > 0)
 );
@@ -217,29 +228,34 @@ function gstSplit(pricePaise, rateBp, inclusive = true) {
 // Setup + one-time migration of existing data
 // ─────────────────────────────────────────────────────────────────────────────
 /**
- * v2: adds the CREDIT_REFUND kind. SQLite can't change a CHECK constraint, so a
- * ledger created by v1 is rebuilt once: copy every row into a new table with the
- * new rule, swap the tables, recreate indexes/triggers. All in one transaction;
- * row count is verified before commit.
+ * Adds new entry kinds (v2: CREDIT_REFUND; v4: OWNER_IN, OWNER_OUT, OTHER_INCOME,
+ * BANK_WITHDRAW, SALARY, PURCHASE). SQLite can't change a CHECK constraint, so an older ledger is
+ * rebuilt once: copy every row into a new table with the new rule, swap the
+ * tables, recreate indexes/triggers. All in one transaction; the row count AND
+ * the money total are verified before commit, so nothing can be lost or changed.
+ * (The database file is also backed up at boot, before this runs.)
  */
 function upgradeLedgerTable(db) {
   const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ledger_entries'").get();
-  if (!row || row.sql.includes('CREDIT_REFUND')) return;
+  if (!row || KINDS.every((k) => row.sql.includes(`'${k}'`))) return;
   const createSql = SCHEMA.slice(SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS ledger_entries'), SCHEMA.indexOf(');', SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS ledger_entries')) + 2)
     .replace('CREATE TABLE IF NOT EXISTS ledger_entries', 'CREATE TABLE ledger_entries_v2');
   const fk = db.pragma('foreign_keys', { simple: true });
   db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
-      const before = db.prepare('SELECT COUNT(*) n FROM ledger_entries').get().n;
+      const before = db.prepare('SELECT COUNT(*) n, COALESCE(SUM(amount_paise),0) s FROM ledger_entries').get();
       db.exec(createSql);
       db.exec(`INSERT INTO ledger_entries_v2 (${COLS.join(',')}) SELECT ${COLS.join(',')} FROM ledger_entries ORDER BY rowid`);
-      const after = db.prepare('SELECT COUNT(*) n FROM ledger_entries_v2').get().n;
-      if (after !== before) throw new Error(`ledger upgrade copied ${after} of ${before} rows`);
+      const copied = db.prepare('SELECT COUNT(*) n, COALESCE(SUM(amount_paise),0) s FROM ledger_entries_v2').get();
+      if (copied.n !== before.n || copied.s !== before.s) {
+        throw new Error(`ledger upgrade copied ${copied.n} of ${before.n} rows (total ${copied.s} vs ${before.s})`);
+      }
+      const after = copied.n;
       db.exec('DROP TABLE ledger_entries');
       db.exec('ALTER TABLE ledger_entries_v2 RENAME TO ledger_entries');
       db.exec(SCHEMA); // indexes + triggers (IF NOT EXISTS)
-      console.log(`[LEDGER] Upgraded ledger table (v2), ${after} rows kept`);
+      console.log(`[LEDGER] Upgraded ledger table (new entry kinds), ${after} rows kept`);
     })();
   } finally {
     db.pragma(`foreign_keys = ${fk ? 'ON' : 'OFF'}`);
@@ -677,6 +693,63 @@ const api = {
     });
   },
 
+  /**
+   * Owner / business money not linked to a guest (Accounts → Record money).
+   *   owner_in      owner puts money in           (mode: cash / upi / card / bank_transfer)
+   *   owner_out     owner takes money out         (mode)
+   *   other_income  income not from a guest       (mode, note required)
+   *   to_bank       cash deposited into the bank  (no mode: cash → bank)
+   *   from_bank     cash withdrawn from the bank  (no mode: bank → cash)
+   * Posted on the requested date, moved past any cash-closed day.
+   */
+  businessEntry(p, db = getDb()) {
+    const TYPES = { owner_in: 'OWNER_IN', owner_out: 'OWNER_OUT', other_income: 'OTHER_INCOME',
+      to_bank: 'BANK_DEPOSIT', from_bank: 'BANK_WITHDRAW' };
+    const kind = TYPES[p.type];
+    if (!kind) throw new LedgerError('BAD_TYPE', `type must be one of: ${Object.keys(TYPES).join(', ')}`);
+    const note = p.reason == null ? '' : String(p.reason).trim().slice(0, 300);
+    if (kind === 'OTHER_INCOME' && !note) throw new LedgerError('REASON_REQUIRED', 'Write what this income is for');
+    const wanted = p.bizDate || istDate();
+    if (!isValidDate(wanted)) throw new LedgerError('BAD_DATE', 'Date must be YYYY-MM-DD');
+    if (wanted > istDate()) throw new LedgerError('FUTURE_DATE', 'The date cannot be in the future');
+    const biz = openBizDate(db, p.propertyId, wanted);
+    const needsMode = ['OWNER_IN', 'OWNER_OUT', 'OTHER_INCOME'].includes(kind);
+    return insertRow(db, {
+      property_id: p.propertyId, kind, biz_date: biz, ref_date: wanted,
+      amount_paise: assertPaise(p.amountPaise), mode: needsMode ? modeOf(p.mode) : null,
+      category: p.category ? String(p.category).trim().slice(0, 40) : null,
+      reason: note || null, user_id: p.userId || null, idem_key: p.idemKey || null,
+    });
+  },
+
+  /** Salary paid to a staff member for a month (YYYY-MM). Posted past any cash-closed day. */
+  salaryPayment(p, db = getDb()) {
+    if (!p.staffId) throw new LedgerError('STAFF_REQUIRED', 'Choose a staff member');
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(p.month || ''))) throw new LedgerError('BAD_MONTH', 'Month must be YYYY-MM');
+    const wanted = p.bizDate || istDate();
+    if (!isValidDate(wanted)) throw new LedgerError('BAD_DATE', 'Date must be YYYY-MM-DD');
+    if (wanted > istDate()) throw new LedgerError('FUTURE_DATE', 'The date cannot be in the future');
+    return insertRow(db, {
+      property_id: p.propertyId, kind: 'SALARY', biz_date: openBizDate(db, p.propertyId, wanted), ref_date: wanted,
+      amount_paise: assertPaise(p.amountPaise), mode: modeOf(p.mode), category: 'salary',
+      period_start: `${p.month}-01`, reason: p.reason ? String(p.reason).trim().slice(0, 300) || null : null,
+      user_id: p.userId || null, idem_key: p.idemKey || null, source_table: 'payroll_staff', source_id: p.staffId,
+    });
+  },
+
+  /** Goods bought (blankets, utensils ...). One ledger row per purchase bill. */
+  purchase(p, db = getDb()) {
+    const wanted = p.bizDate || istDate();
+    if (!isValidDate(wanted)) throw new LedgerError('BAD_DATE', 'Date must be YYYY-MM-DD');
+    if (wanted > istDate()) throw new LedgerError('FUTURE_DATE', 'The date cannot be in the future');
+    return insertRow(db, {
+      property_id: p.propertyId, kind: 'PURCHASE', biz_date: openBizDate(db, p.propertyId, wanted), ref_date: wanted,
+      amount_paise: assertPaise(p.amountPaise), mode: modeOf(p.mode), category: String(p.category || 'Other').trim().slice(0, 40),
+      reason: p.reason ? String(p.reason).trim().slice(0, 300) || null : null,
+      user_id: p.userId || null, idem_key: p.idemKey || null, source_table: 'purchases', source_id: p.purchaseId,
+    });
+  },
+
   /** Reverse one entry (dated today / next open day). */
   reverse({ propertyId, entryId, reason, userId }, db = getDb()) {
     if (!reason || !String(reason).trim()) throw new LedgerError('REASON_REQUIRED', 'A reversal needs a reason');
@@ -877,5 +950,5 @@ function reverseEntry(db, o, reason, userId) {
 
 module.exports = {
   ...api, setupLedger, runBilling, prorate, gstSplit, GST_RATES_BP, billingAnchor, nextCycleStart, addMonthsAnchored, openBizDate,
-  LedgerError, SQL, MODES, KINDS, PLANS,
+  LedgerError, SQL, MODES, KINDS, PLANS, BUSINESS_KINDS,
 };
