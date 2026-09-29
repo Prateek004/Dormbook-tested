@@ -24,6 +24,9 @@ const summary    = require('../controllers/summaryController');
 const access     = require('../controllers/accessController');
 const account    = require('../controllers/accountController');
 const share      = require('../controllers/shareController');
+const accounts   = require('../controllers/accountsController');
+const payroll    = require('../controllers/payrollController');
+const purchases  = require('../controllers/purchasesController');
 const { can }    = require('../middleware/permissions');
 const { safeEqual } = require('../util/security');
 
@@ -155,6 +158,29 @@ router.get ('/residents/:id/statement', authenticate, sameProperty, can('payment
 router.post('/residents/:id/discount',  authenticate, sameProperty, can('discounts'), assertOwnsResource('residents'), daily.addWaiver);
 router.post('/ledger/entries/:id/reverse', authenticate, sameProperty, requireRole('owner'),  daily.reverseEntry);
 router.get ('/ledger/integrity',        authenticate, sameProperty, requireRole('owner'),     daily.integrity);
+
+// ── Accounts: books built from the ledger (Day Book, ledgers, Trial Balance, P&L, Balance Sheet)
+router.get ('/accounts/chart',          authenticate, sameProperty, can('reports_finance'), accounts.chart);
+router.get ('/accounts/day-book',       authenticate, sameProperty, can('reports_finance'), accounts.dayBook);
+router.get ('/accounts/ledger',         authenticate, sameProperty, can('reports_finance'), accounts.accountLedger);
+router.get ('/accounts/trial-balance',  authenticate, sameProperty, can('reports_finance'), accounts.trialBalance);
+router.get ('/accounts/profit-loss',    authenticate, sameProperty, can('reports_finance'), accounts.profitLoss);
+router.get ('/accounts/balance-sheet',  authenticate, sameProperty, can('reports_finance'), accounts.balanceSheet);
+router.get ('/accounts/entries',        authenticate, sameProperty, can('reports_finance'), accounts.listEntries);
+// Owner money in / out, other income, cash ↔ bank — owner only.
+router.post('/accounts/entries',        authenticate, sameProperty, requireRole('owner'),   accounts.createEntry);
+
+// ── Staff salary (owner only: salaries are private)
+router.get  ('/payroll/staff',            authenticate, sameProperty, requireRole('owner'), payroll.listStaff);
+router.post ('/payroll/staff',            authenticate, sameProperty, requireRole('owner'), payroll.addStaff);
+router.get  ('/payroll/staff/:id',        authenticate, sameProperty, requireRole('owner'), payroll.staffDetail);
+router.patch('/payroll/staff/:id',        authenticate, sameProperty, requireRole('owner'), payroll.updateStaff);
+router.post ('/payroll/staff/:id/salary', authenticate, sameProperty, requireRole('owner'), payroll.changeSalary);
+router.post ('/payroll/staff/:id/pay',    authenticate, sameProperty, requireRole('owner'), payroll.paySalary);
+
+// ── Purchases (same permission as expenses; undo is owner-only via /ledger/entries/:id/reverse)
+router.get  ('/purchases',                authenticate, sameProperty, can('expenses'), purchases.listPurchases);
+router.post ('/purchases',                authenticate, sameProperty, can('expenses'), purchases.createPurchase);
 
 // ── Add-on Catalog ────────────────────────────────────────
 router.get   ('/addons/catalog',     authenticate, sameProperty, addons.getCatalog);
