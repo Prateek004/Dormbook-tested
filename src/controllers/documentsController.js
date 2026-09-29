@@ -19,7 +19,24 @@ const MAX_PER_RESIDENT = 10;
 
 function uploadRoot() {
   const base = process.env.DB_DIR || '/data';
-  return path.join(base, 'uploads');
+  return path.resolve(base, 'uploads');
+}
+
+/** What the file really is, from its first bytes. Only these four kinds are ever accepted. */
+function sniffType(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (buf.subarray(0, 5).toString('latin1') === '%PDF-') return 'application/pdf';
+  return null;
+}
+
+/** A stored path is used only if it is inside the uploads folder (never follow a path out of it). */
+function insideUploads(file) {
+  const root = uploadRoot();
+  const full = path.resolve(String(file || ''));
+  return full.startsWith(root + path.sep);
 }
 
 function uploadDocument(req, res) {
@@ -34,11 +51,8 @@ function uploadDocument(req, res) {
   const buf = Buffer.from(m[2], 'base64');
   if (!buf.length) return res.status(400).json({ error: 'The file is empty' });
   if (buf.length > MAX_BYTES) return res.status(413).json({ error: 'File is too large (max 1.5 MB). Take the photo again or use a smaller PDF.' });
-  // check the file really is what it claims to be
-  const magic = buf.subarray(0, 4).toString('hex');
-  const ok = (m[1] === 'image/jpeg' && magic.startsWith('ffd8')) || (m[1] === 'image/png' && magic === '89504e47')
-    || (m[1] === 'application/pdf' && magic === '25504446') || (m[1] === 'image/webp' && buf.subarray(8, 12).toString() === 'WEBP');
-  if (!ok) return res.status(400).json({ error: 'The file content does not match its type' });
+  // Check the file really is what it claims to be (its first bytes), not just the name/type it was sent with.
+  if (sniffType(buf) !== m[1]) return res.status(400).json({ error: 'The file content does not match its type' });
 
   const count = db.prepare('SELECT COUNT(*) n FROM resident_documents WHERE resident_id = ?').get(resident.id).n;
   if (count >= MAX_PER_RESIDENT) return res.status(409).json({ error: `A resident can have at most ${MAX_PER_RESIDENT} documents` });
@@ -74,6 +88,7 @@ function getDocument(req, res) {
   if (!doc) return res.status(404).json({ error: 'Document not found' });
   let data;
   try {
+    if (!insideUploads(doc.file_path)) throw new Error('stored path is outside the uploads folder');
     data = decryptBuffer(fs.readFileSync(doc.file_path));
   } catch (e) {
     console.error('[DOCS] cannot read', doc.id, e.message);
@@ -81,9 +96,13 @@ function getDocument(req, res) {
   }
   try { logDocumentAccess(db, { residentId: doc.resident_id, accessedBy: req.user.id, documentType: 'id_document', ip: req.ip }); }
   catch (e) { console.error('[AUDIT] document access log failed:', e.message); }
-  res.setHeader('Content-Type', doc.mime_type);
+  // Served as a plain file that can never run as a web page or script.
+  const type = MIME[doc.mime_type] ? doc.mime_type : 'application/octet-stream';
+  res.setHeader('Content-Type', type);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   res.setHeader('Cache-Control', 'private, no-store');
-  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Content-Disposition', `attachment; filename="id-document.${MIME[type] || 'bin'}"`);
   return res.send(data);
 }
 
@@ -93,10 +112,10 @@ function deleteDocument(req, res) {
     .get(req.params.docId, req.params.id, req.user.property_id);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
   db.prepare('DELETE FROM resident_documents WHERE id = ?').run(doc.id);
-  fs.rmSync(doc.file_path, { force: true });
+  if (insideUploads(doc.file_path)) fs.rmSync(doc.file_path, { force: true });
   writeAudit({ propertyId: req.user.property_id, userId: req.user.id, action: 'ID_DOCUMENT_DELETED', entityType: 'residents',
     entityId: doc.resident_id, snapshot: { doc_type: doc.doc_type }, ip: req.ip });
   return res.json({ message: 'Document deleted' });
 }
 
-module.exports = { uploadDocument, listDocuments, getDocument, deleteDocument, DOC_TYPES };
+module.exports = { uploadDocument, listDocuments, getDocument, deleteDocument, DOC_TYPES, sniffType };
