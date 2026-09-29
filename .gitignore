@@ -1,0 +1,27 @@
+# Secrets — never commit. Put them in Railway → Variables.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+
+# Data (real guests and money) — lives on the Railway volume, never in git
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+data/
+uploads/
+backups/
+
+# Build output
+node_modules/
+android/
+ios/
+*.apk
+*.aab
+coverage/
+.DS_Store
+npm-debug.log*
