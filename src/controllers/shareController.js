@@ -68,8 +68,8 @@ function page(title, body) {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>${esc(title)}</title>
 <style>
-:root{--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--bad:#b91c1c;--good:#047857;--brand:#4f46e5}
-*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+:root{--ink:#1f2a2e;--muted:#6b7280;--line:#e5e7eb;--bad:#b91c1c;--good:#047857;--brand:#0f766e}
+*{box-sizing:border-box}body{margin:0;background:#f6f7f5;color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .wrap{max-width:760px;margin:0 auto;padding:16px}.doc{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid var(--ink);padding-bottom:12px;flex-wrap:wrap}
 .name{font-size:20px;font-weight:700}.sub,.muted{color:var(--muted);font-size:13px}.ttl{font-size:18px;font-weight:700;text-align:right}
