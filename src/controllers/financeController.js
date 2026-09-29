@@ -47,7 +47,7 @@ function getDashboard(req, res) {
     const t = db.prepare(`SELECT
         COALESCE(SUM(CASE WHEN kind IN ('PAYMENT','DEPOSIT_IN') AND biz_date = @today THEN amount_paise END),0) AS today_collection,
         COALESCE(SUM(CASE WHEN kind = 'PAYMENT' AND biz_date >= @mstart AND biz_date <= @today THEN amount_paise END),0) AS month_revenue,
-        COALESCE(SUM(CASE WHEN kind = 'EXPENSE' AND ref_date >= @mstart AND ref_date <= @mend THEN amount_paise END),0) AS month_expenses
+        COALESCE(SUM(CASE WHEN kind IN ('EXPENSE','SALARY','PURCHASE') AND ref_date >= @mstart AND ref_date <= @mend THEN amount_paise END),0) AS month_expenses
       FROM ledger_entries WHERE property_id = @pid`).get({ pid: propertyId, today, mstart: thisMonth + '-01', mend: thisMonth + '-31' });
 
     const dues = db.prepare(`SELECT r.status, x.dues, x.dep FROM residents r
@@ -351,9 +351,9 @@ function reportSummary(req, res) {
   `).all(propertyId, from, to);
 
   const expenses = db.prepare(`
-    SELECT category, COALESCE(SUM(amount_paise),0) AS total_paise
-    FROM ledger_entries WHERE property_id=? AND kind='EXPENSE' AND ref_date BETWEEN ? AND ?
-    GROUP BY category HAVING total_paise <> 0
+    SELECT CASE WHEN kind = 'SALARY' THEN 'Staff salaries' WHEN kind = 'PURCHASE' THEN 'Purchases: ' || COALESCE(category,'Other') ELSE category END AS category, COALESCE(SUM(amount_paise),0) AS total_paise
+    FROM ledger_entries WHERE property_id=? AND kind IN ('EXPENSE','SALARY','PURCHASE') AND ref_date BETWEEN ? AND ?
+    GROUP BY 1 HAVING total_paise <> 0
   `).all(propertyId, from, to);
 
   const other = db.prepare(`SELECT
