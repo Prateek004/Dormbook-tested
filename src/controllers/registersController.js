@@ -16,7 +16,7 @@ const { SQL } = ledger;
 const col = (key, label, type = 'text') => ({ key, label, type });
 
 const LABEL = { rent: 'Rent', other: 'Other charges', addon: 'Add-ons', damage: 'Damages / deductions', food: 'Food',
-  electricity: 'Electricity' };
+  electricity: 'Electricity', other_income: 'Other income (not from guests)' };
 const KIND_LABEL = { PAYMENT: 'Payment', DEPOSIT_IN: 'Deposit received', DEPOSIT_REFUND: 'Deposit refunded', CREDIT_REFUND: 'Advance refunded' };
 const MODE_LABEL = { cash: 'Cash', upi: 'UPI', card: 'Card', bank_transfer: 'Bank transfer' };
 
@@ -124,11 +124,12 @@ const REPORTS = {
   pnl: {
     title: 'Profit & Loss Statement', perm: 'reports_finance',
     build(db, pid, from, to) {
-      const income = db.prepare(`SELECT COALESCE(category,'rent') head, SUM(amount_paise) amount FROM ledger_entries
-        WHERE property_id = ? AND kind = 'PAYMENT' AND biz_date BETWEEN ? AND ? GROUP BY COALESCE(category,'rent')
+      const income = db.prepare(`SELECT CASE WHEN kind = 'OTHER_INCOME' THEN 'other_income' ELSE COALESCE(category,'rent') END head,
+          SUM(amount_paise) amount FROM ledger_entries
+        WHERE property_id = ? AND kind IN ('PAYMENT','OTHER_INCOME') AND biz_date BETWEEN ? AND ? GROUP BY head
         HAVING amount <> 0`).all(pid, from, to);
-      const exp = db.prepare(`SELECT category head, SUM(amount_paise) amount FROM ledger_entries
-        WHERE property_id = ? AND kind = 'EXPENSE' AND ref_date BETWEEN ? AND ? GROUP BY category HAVING amount <> 0`).all(pid, from, to);
+      const exp = db.prepare(`SELECT CASE WHEN kind = 'SALARY' THEN 'Staff salaries' WHEN kind = 'PURCHASE' THEN 'Purchases: ' || COALESCE(category,'Other') ELSE category END head, SUM(amount_paise) amount FROM ledger_entries
+        WHERE property_id = ? AND kind IN ('EXPENSE','SALARY','PURCHASE') AND ref_date BETWEEN ? AND ? GROUP BY head HAVING amount <> 0`).all(pid, from, to);
       const disc = db.prepare(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind = 'WAIVER'
         AND biz_date BETWEEN ? AND ?`).get(pid, from, to).t;
       const ti = income.reduce((s, r) => s + r.amount, 0);
