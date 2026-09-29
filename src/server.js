@@ -5,7 +5,6 @@ const express = require('express');
 const helmet  = require('helmet');
 const cors    = require('cors');
 const morgan  = require('morgan');
-const rateLimit = require('express-rate-limit');
 
 const { setDb } = require('./db/connection');
 const { initDb: openDb } = require('./db/init');
@@ -58,36 +57,23 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '3mb' })); // ID photos arrive as base64 (max 1.5 MB file)
-app.use(morgan(ENV === 'production' ? 'combined' : 'dev'));
+// Request log. Guest bill links (/b/<secret>) and query strings are cut out so no link
+// or search text ends up in the logs.
+morgan.token('safe-url', (req) => String(req.originalUrl || req.url || '')
+  .replace(/^\/b\/[^/?#]+/, '/b/[link]').replace(/\?.*$/, (q) => (q.length > 1 ? '?[…]' : '')));
+app.use(morgan(ENV === 'production'
+  ? ':remote-addr - :remote-user [:date[clf]] ":method :safe-url HTTP/:http-version" :status :res[content-length] ":user-agent"'
+  : ':method :safe-url :status :response-time ms'));
 
-// Brute-force protection on credential endpoints: 40 attempts / 15 min / IP (all staff on one
-// Wi-Fi share an IP). Each account is also locked for 15 minutes after 5 wrong tries.
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 40,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts. Please try again in a few minutes.' },
-});
-app.use('/api/v1/auth/login',           authLimiter);
-app.use('/api/v1/auth/register',        authLimiter);
-app.use('/api/v1/auth/forgot-password', authLimiter);
-app.use('/api/v1/auth/reset-password',  authLimiter);
-app.use('/api/v1/auth/staff',           authLimiter);   // login code + MPIN set up
-app.use('/api/v1/auth/change-password', authLimiter);
-app.use('/api/v1/auth/change-mpin',     authLimiter);
-
-// Whole API: a very high ceiling that normal use never reaches (a whole hostel on one Wi-Fi
-// shares one IP), but stops a runaway script from flooding the server.
-app.use('/api/', rateLimit({
-  windowMs: 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'Too many requests. Please wait a minute.' },
-}));
+// Rate limits: strict on sign-in (per IP + per mobile for codes, back-off per account),
+// moderate on public pages, looser for signed-in users. All numbers are env settings —
+// see src/middleware/rateLimits.js.
+const { applyRateLimits, billLink } = require('./middleware/rateLimits');
+applyRateLimits(app);
 
 // Guest bill links (no sign-in): limited so links can't be guessed by brute force.
 const share = require('./controllers/shareController');
-app.get('/b/:token', rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false,
-  message: 'Too many requests. Please wait a minute.' }), share.viewBill);
+app.get('/b/:token', billLink, share.viewBill);
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/api/v1', routes);
@@ -118,15 +104,27 @@ app.use((err, req, res, _next) => {
     if (res.headersSent) return;
     return res.status(503).json({ error: 'Server busy — please retry' });
   }
-  console.error('[ERROR]', err.message, err.stack);
+  // Other client mistakes the body reader reports (bad charset, aborted upload…): plain message, no details.
+  const st = err && Number(err.status || err.statusCode);
+  if (st >= 400 && st < 500) {
+    if (res.headersSent) return;
+    return res.status(st).json({ error: 'The request could not be read. Please try again.' });
+  }
+  // Anything else: full details go to the server log only; the user gets a short message and a
+  // reference to quote to support (never a stack trace, file path or database error).
+  const ref = require('crypto').randomBytes(4).toString('hex');
+  console.error(`[ERROR ref=${ref}] ${req.method} ${String(req.originalUrl || '').replace(/\?.*$/, '')}`,
+    err && err.message, err && err.stack);
   if (res.headersSent) return;   // response already streaming (e.g. PDF export)
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: `Something went wrong on our side. Please try again. (ref ${ref})`, ref });
 });
 
 // Refuse to start in production without the secrets the app cannot work without.
 // A clear boot error in Railway logs beats a running app where every login fails.
 function checkRequiredEnv() {
-  if (ENV !== 'production') return;
+  const onPaas = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+  if (ENV !== 'production' && !onPaas) return;
+  if (ENV !== 'production') console.warn('[BOOT WARNING] NODE_ENV is not "production" on Railway — set NODE_ENV=production.');
   const problems = [];
   const jwt = process.env.JWT_SECRET;
   if (!jwt || jwt.startsWith('CHANGE_ME') || jwt.length < 32) problems.push('JWT_SECRET missing or shorter than 32 characters');
