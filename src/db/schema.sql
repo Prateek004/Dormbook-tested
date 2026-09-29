@@ -416,3 +416,59 @@ CREATE TABLE IF NOT EXISTS resident_documents (
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_resdocs_resident ON resident_documents(resident_id);
+
+-- ── Staff salary (payroll) ────────────────────────────────────────────
+-- Staff here do not need an app login (cook, cleaner, warden...). Salary
+-- payments are money: they live in ledger_entries (kind SALARY, source_id =
+-- staff id, period_start = the month paid for). These tables only hold who the
+-- staff are and their monthly salary over time.
+CREATE TABLE IF NOT EXISTS payroll_staff (
+  id           TEXT PRIMARY KEY,
+  property_id  TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  designation  TEXT,
+  mobile       TEXT,
+  joined_on    TEXT NOT NULL,
+  left_on      TEXT,
+  created_by   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payroll_staff_property ON payroll_staff(property_id);
+-- Monthly salary from a month onwards (YYYY-MM). The latest row on or before a month applies.
+CREATE TABLE IF NOT EXISTS payroll_rates (
+  staff_id     TEXT NOT NULL,
+  property_id  TEXT NOT NULL,
+  from_month   TEXT NOT NULL CHECK (from_month GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'),
+  amount_paise INTEGER NOT NULL CHECK (typeof(amount_paise) = 'integer' AND amount_paise >= 0),
+  created_by   TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (staff_id, from_month)
+);
+
+-- ── Purchases (blankets, utensils, cleaning supplies ...) ─────────────
+-- The money is one ledger_entries row (kind PURCHASE, source_id = purchase id).
+CREATE TABLE IF NOT EXISTS purchases (
+  id            TEXT PRIMARY KEY,
+  property_id   TEXT NOT NULL,
+  purchase_date TEXT NOT NULL,
+  vendor        TEXT,
+  bill_no       TEXT,
+  category      TEXT NOT NULL,
+  payment_mode  TEXT NOT NULL CHECK (payment_mode IN ('cash','upi','card','bank_transfer')),
+  total_paise   INTEGER NOT NULL CHECK (typeof(total_paise) = 'integer' AND total_paise > 0),
+  note          TEXT,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_purchases_property ON purchases(property_id, purchase_date);
+CREATE TABLE IF NOT EXISTS purchase_items (
+  id           TEXT PRIMARY KEY,
+  purchase_id  TEXT NOT NULL,
+  item         TEXT NOT NULL,
+  qty          REAL NOT NULL CHECK (qty > 0),
+  unit         TEXT,
+  rate_paise   INTEGER NOT NULL CHECK (rate_paise >= 0),
+  amount_paise INTEGER NOT NULL CHECK (amount_paise >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchase_id);
