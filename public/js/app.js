@@ -199,31 +199,31 @@ const NAV = [
     { id: 'daily',     label: '📅 Daily View',      perms: ['reports_daily'] },
     // One menu item, three tabs inside.
     { id: 'reports_menu', label: '📊 Reports', title: 'Reports', tabs: [
-      { id: 'summary', label: '📈 Monthly Summary', perms: ['reports_finance'] },
-      { id: 'reports', label: '📊 Registers',       perms: ['reports_daily', 'reports_finance'] },
-      { id: 'gst',     label: '🧾 GST Report',      perms: ['reports_finance'] },
+      { id: 'summary', label: '📈 Monthly Summary', desc: 'Money in and out for a month', perms: ['reports_finance'] },
+      { id: 'reports', label: '📊 Registers',       desc: 'Guest, payment and cash registers', perms: ['reports_daily', 'reports_finance'] },
+      { id: 'gst',     label: '🧾 GST Report',      desc: 'Tax on bills, for your CA', perms: ['reports_finance'] },
     ] },
   ] },
   { section: 'Accounts', items: [
     // Books built from the money ledger. Recording owner money is owner-only (checked on the server too).
     { id: 'accounts_menu', label: '📒 Accounts', title: 'Accounts', tabs: [
-      { id: 'acc_entries', label: '💰 Record money',   perms: ['reports_finance'] },
-      { id: 'acc_daybook', label: '📒 Day Book',       perms: ['reports_finance'] },
-      { id: 'acc_ledger',  label: '📘 Ledgers',        perms: ['reports_finance'] },
-      { id: 'acc_tb',      label: '⚖️ Trial Balance',  perms: ['reports_finance'] },
-      { id: 'acc_pl',      label: '📈 Profit & Loss',  perms: ['reports_finance'] },
-      { id: 'acc_bs',      label: '🏦 Balance Sheet',  perms: ['reports_finance'] },
+      { id: 'acc_entries', label: '💰 Record money',   desc: 'Owner money in / out, other income', perms: ['reports_finance'] },
+      { id: 'acc_daybook', label: '📒 Day Book',       desc: 'Every entry, day by day', perms: ['reports_finance'] },
+      { id: 'acc_ledger',  label: '📘 Ledgers',        desc: 'One account at a time', perms: ['reports_finance'] },
+      { id: 'acc_tb',      label: '⚖️ Trial Balance',  desc: 'Check the books add up', perms: ['reports_finance'] },
+      { id: 'acc_pl',      label: '📈 Profit & Loss',  desc: 'Did you make money?', perms: ['reports_finance'] },
+      { id: 'acc_bs',      label: '🏦 Balance Sheet',  desc: 'What you own and owe', perms: ['reports_finance'] },
     ] },
   ] },
   { section: 'Settings', items: [
     // One menu item, every setup screen as a tab inside.
     { id: 'settings_menu', label: '⚙️ Settings', title: 'Settings', tabs: [
-      { id: 'beds',     label: '🛏 Beds' },
-      { id: 'catalog',  label: '☕ Items & Prices',  perms: ['settings'] },
-      { id: 'settings', label: '🏢 Business & GST',  perms: ['settings'] },
-      { id: 'staff',    label: '👤 Users & Access',  perms: ['staff'] },
-      { id: 'audit',    label: '🔍 Audit Log',       perms: ['audit'] },
-      { id: 'account',  label: '🔑 My Account' },
+      { id: 'beds',     label: '🛏 Beds',            desc: 'Floors, bunkers and beds' },
+      { id: 'catalog',  label: '☕ Items & Prices',  desc: 'Tea, coffee, laundry for bills', perms: ['settings'] },
+      { id: 'settings', label: '🏢 Business & GST',  desc: 'Name, address, GST, rules', perms: ['settings'] },
+      { id: 'staff',    label: '👤 Users & Access',  desc: 'Staff logins and permissions', perms: ['staff'] },
+      { id: 'audit',    label: '🔍 Audit Log',       desc: 'Who changed what, and when', perms: ['audit'] },
+      { id: 'account',  label: '🔑 My Account',      desc: 'Password / MPIN, UPI QR, bank' },
     ] },
   ] },
 ];
@@ -259,14 +259,26 @@ function buildNav() {
   );
 }
 
+/** Phones (the app, or a narrow browser): menu groups open as a list, like a phone's Settings app.
+ *  Wide screens keep the tabs. (Phones used to reopen the last tab — once "My Account" was opened,
+ *  Settings always landed there with the other tabs scrolled out of sight, so it looked stuck.) */
+function useListMenu() {
+  try { return IS_APP_UI || !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches); }
+  catch (_) { return IS_APP_UI; }
+}
+function isGroupId(page) { return PAGES.some(p => p.id === page && p.tabs); }
+
 function navigate(page) {
-  // A menu group opens its last-used (or first allowed) tab.
   const g = PAGES.find(p => p.id === page && p.tabs);
   if (g) {
     const tabs = tabsOf(g);
     if (!tabs.length) return;
-    STATE.lastTab = STATE.lastTab || {};
-    page = tabs.some(t => t.id === STATE.lastTab[g.id]) ? STATE.lastTab[g.id] : tabs[0].id;
+    if (!useListMenu()) {
+      // Wide screen: a menu group opens its last-used (or first allowed) tab.
+      STATE.lastTab = STATE.lastTab || {};
+      page = tabs.some(t => t.id === STATE.lastTab[g.id]) ? STATE.lastTab[g.id] : tabs[0].id;
+    }
+    // Phone: stay on the group id — renderPage shows the list of its screens.
   }
   STATE.currentPage = page;
   const group = groupOf(page);
@@ -275,9 +287,51 @@ function navigate(page) {
   document.querySelectorAll('.nav-list a').forEach(a =>
     a.classList.toggle('active', a.dataset.page === navId)
   );
-  document.getElementById('page-title').textContent = group ? group.title : titleFor(page);
+  const listMode = useListMenu();
+  document.getElementById('page-title').textContent = group && !listMode ? group.title : titleFor(page);
+  updateBackButton(listMode && group ? group : null);
   updateTabbar(page);
+  const scroller = document.querySelector('#main-app .content');
+  if (scroller) scroller.scrollTop = 0;           // every screen opens at the top
   renderPage(page);
+}
+
+/** "‹ Settings" button in the header while inside a group's screen (phone layout). */
+function updateBackButton(group) {
+  let btn = document.getElementById('app-back');
+  if (!group) { if (btn) btn.hidden = true; return; }
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'app-back'; btn.type = 'button'; btn.className = 'app-back';
+    const title = document.getElementById('page-title');
+    title.parentNode.insertBefore(btn, title);
+    btn.addEventListener('click', () => { if (btn.dataset.target) navigate(btn.dataset.target); });
+  }
+  btn.dataset.target = group.id;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>${h(group.title)}</span>`;
+  btn.setAttribute('aria-label', `Back to ${group.title}`);
+  btn.hidden = false;
+}
+
+/** A group (Settings / Reports / Accounts) as a phone-style list. */
+function renderGroupMenu(el, groupId) {
+  const g = PAGES.find(p => p.id === groupId);
+  const tabs = g ? tabsOf(g) : [];
+  if (!tabs.length) { el.innerHTML = '<div class="empty-state"><p>Nothing here for your login.</p></div>'; return; }
+  const split = (label) => { const m = String(label).match(/^(\S+)\s+(.*)$/); return m ? [m[1], m[2]] : ['', label]; };
+  el.innerHTML = `
+    <div class="menu-list" role="list">${tabs.map(t => { const [icon, text] = split(t.label); return `
+      <button type="button" class="menu-row" role="listitem" data-go="${h(t.id)}">
+        <span class="menu-ic" aria-hidden="true">${h(icon)}</span>
+        <span class="menu-txt"><span class="menu-title">${h(text)}</span>${t.desc ? `<span class="menu-sub">${h(t.desc)}</span>` : ''}</span>
+        <svg class="menu-chev" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+      </button>`; }).join('')}
+    </div>
+    ${groupId === 'settings_menu' ? `<button type="button" class="menu-row menu-logout" id="menu-logout">
+        <span class="menu-ic" aria-hidden="true">🚪</span><span class="menu-txt"><span class="menu-title">Sign out</span></span></button>` : ''}`;
+  el.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => navigate(b.dataset.go)));
+  const lo = el.querySelector('#menu-logout');
+  if (lo) lo.addEventListener('click', () => { if (confirm('Sign out of DormBook on this phone?')) logout(); });
 }
 
 // ── App tab bar: Today · Guests · (+ Check In) · Pay · More ──
@@ -325,7 +379,13 @@ function buildTabbar() {
 }
 function updateTabbar(page) {
   const bar = document.getElementById('tabbar'); if (!bar) return;
-  bar.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === page));
+  const inBar = [...bar.querySelectorAll('[data-tab]')].some(b => b.dataset.tab === page);
+  // Screens that are not in the bar (Settings, Reports…) light up "More", so you always see where you are.
+  bar.querySelectorAll('[data-tab]').forEach(b => {
+    const on = inBar ? b.dataset.tab === page : b.dataset.tab === '__more';
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  });
 }
 
 function titleFor(page) {
@@ -334,7 +394,9 @@ function titleFor(page) {
     daily: 'Daily View', beds: 'Beds', catalog: 'Items & Prices', settings: 'Business & GST', staff: 'Users & Access',
     audit: 'Audit Log', acc_entries: 'Record money', acc_daybook: 'Day Book', acc_ledger: 'Ledgers', acc_tb: 'Trial Balance',
     acc_pl: 'Profit & Loss', acc_bs: 'Balance Sheet', purchases: 'Purchases', salary: 'Staff Salary', feedback: 'Tenant Feedback', admin: 'Admin Panel', account: 'My Account' };
-  return map[page] || page;
+  if (map[page]) return map[page];
+  const g = PAGES.find(p => p.id === page && p.title);
+  return g ? g.title : page;
 }
 
 function refreshCurrentPage() { if (STATE.currentPage) renderPage(STATE.currentPage); }
@@ -567,8 +629,15 @@ async function renderPage(page) {
   const main = document.getElementById('page-content');
   document.getElementById('header-actions').innerHTML = '';
   STATE.currentPage = page;
-  // Grouped pages get a tab bar; the screen itself renders below it.
-  const group = groupOf(page);
+  // Phone: a menu group is a list of its screens.
+  if (isGroupId(page)) {
+    main.innerHTML = '';
+    try { renderGroupMenu(main, page); }
+    catch (ex) { main.innerHTML = `<div class="error-msg">Failed to load: ${h(ex.message)}</div>`; }
+    return;
+  }
+  // Wide screen: grouped pages get a tab bar; the screen itself renders below it.
+  const group = useListMenu() ? null : groupOf(page);
   let el = main;
   if (group) {
     const tabs = tabsOf(group);
@@ -2846,6 +2915,7 @@ async function renderAdminPanel(el) {
                 <td>${a.properties}</td>
                 <td>${a.residents}</td>
                   <td>
+                  <button class="btn btn-primary btn-sm" onclick="adminViewAccount('${esc(a.id)}')">👁 View</button>
                   ${a.plan !== 'active' ? `<button class="btn btn-success btn-sm" onclick="adminActivate('${a.id}')">Activate</button>` : ''}
                   ${a.plan !== 'suspended' ? `<button class="btn btn-danger btn-sm" onclick="adminSuspend('${a.id}')">Suspend</button>` : ''}
                   <button class="btn btn-outline btn-sm" onclick="adminResetPassword('${a.id}','${esc(a.owner_name || '')}')">Reset password</button>
@@ -2858,6 +2928,46 @@ async function renderAdminPanel(el) {
       </div>
     </div>
   `;
+}
+
+/** Super-admin: one customer's overview — business facts and counts only (no guest or money details). */
+async function adminViewAccount(id) {
+  try {
+    const a = await api('GET', `/admin/accounts/${encodeURIComponent(id)}`);
+    const statusText = { trial: 'On trial', active: 'Active (paid)', suspended: 'Suspended', trial_expired: 'Trial expired' }[a.status] || a.status;
+    const roleName = { owner: 'Owner', manager: 'Manager', reception: 'Reception' };
+    const yes = (b) => (b ? '✅ Yes' : '— No');
+    const props = (a.properties || []).map(p => `
+      <div class="card mt-12">
+        <strong>${h(p.name || 'Property')}</strong> <span class="td-small">${h([p.city, p.state].filter(Boolean).join(', '))}</span>
+        <dl class="facts mt-12">
+          <div><dt>Beds</dt><dd>${p.beds.total} total · ${p.beds.occupied} occupied · ${p.beds.available} free</dd></div>
+          <div><dt>Guests staying now</dt><dd>${p.guests.staying_now}</dd></div>
+          <div><dt>Guests (all time)</dt><dd>${p.guests.all_time}</dd></div>
+          <div><dt>Check-ins, last 30 days</dt><dd>${p.guests.checked_in_last_30_days}</dd></div>
+          <div><dt>Payments recorded, last 30 days</dt><dd>${p.payments_recorded_last_30_days}</dd></div>
+          <div><dt>Last activity</dt><dd>${p.last_activity_at ? fmtDate(p.last_activity_at) : '—'}</dd></div>
+          <div><dt>Address added</dt><dd>${yes(p.setup.address_added)}</dd></div>
+          <div><dt>GST</dt><dd>${p.setup.gst_on ? 'On' : 'Off'}${p.setup.gstin_added ? ' · GSTIN added' : ''}</dd></div>
+          <div><dt>UPI / bank added</dt><dd>${yes(p.setup.payment_details_added)}</dd></div>
+        </dl>
+      </div>`).join('') || '<p class="td-small mt-12">No property yet.</p>';
+    const roles = Object.entries(a.staff.by_role || {}).map(([r, c]) => `${c} ${roleName[r] || r}`).join(' · ') || '—';
+    openModal(a.business_name || 'Account', `
+      <dl class="facts">
+        <div><dt>Status</dt><dd>${h(statusText)}</dd></div>
+        <div><dt>Trial ends</dt><dd>${fmtDate(a.trial_ends_at)}</dd></div>
+        <div><dt>Joined</dt><dd>${fmtDate(a.created_at)}</dd></div>
+        <div><dt>Owner</dt><dd>${h(a.owner.name || '—')}</dd></div>
+        <div><dt>Owner mobile</dt><dd>${h(a.owner.mobile || '—')}</dd></div>
+        <div><dt>Owner email</dt><dd>${h(a.owner.email || '—')}</dd></div>
+        <div><dt>Logins</dt><dd>${h(roles)}${a.staff.inactive ? ` · ${a.staff.inactive} switched off` : ''}</dd></div>
+        ${a.suspension_reason ? `<div><dt>Suspended because</dt><dd>${h(a.suspension_reason)}</dd></div>` : ''}
+      </dl>
+      ${props}
+      <p class="td-small mt-12">🔒 ${h(a.hidden)}</p>
+      <div class="btn-group mt-12"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>`, { wide: true });
+  } catch (ex) { toast(ex.message, 'error'); }
 }
 
 async function adminActivate(id) {
@@ -3078,8 +3188,12 @@ async function renderAccount(el) {
         <div>
           <div class="section-title">UPI QR</div>
           <div class="qr-preview" id="acc-qr">${pay.qr_svg || '<div class="text-muted td-small">No QR yet</div>'}</div>
-          <label class="btn btn-primary mt-12">📷 Scan / upload your QR
-            <input type="file" accept="image/*" capture="environment" hidden onchange="readQrImage(this)" /></label>
+          <div class="btn-group mt-12">
+            <label class="btn btn-primary">📷 Take photo of QR
+              <input type="file" accept="image/*" capture="environment" hidden onchange="readQrImage(this)" /></label>
+            <label class="btn btn-outline">🖼 Pick screenshot
+              <input type="file" accept="image/png,image/jpeg,image/webp" hidden onchange="readQrImage(this)" /></label>
+          </div>
           <div class="field-note">Take a photo of your shop QR (PhonePe, GPay, Paytm, bank QR) or pick a screenshot. We read the UPI ID from it.</div>
           <div class="field mt-12"><label for="acc-upi">UPI ID</label><input id="acc-upi" value="${h(pay.upi_id)}" placeholder="name@okhdfcbank" autocomplete="off" /></div>
           <div class="field"><label for="acc-upiname">Name shown to the guest</label><input id="acc-upiname" value="${h(pay.upi_name)}" maxlength="100" /></div>
@@ -3778,6 +3892,8 @@ async function confirmReverseAccEntry(id) {
         const sidebar = document.getElementById('sidebar');
         if (sidebar && sidebar.classList.contains('open')) { closeSidebar(); return; }
         if (STATE.user) {
+          const grp = useListMenu() && STATE.currentPage ? groupOf(STATE.currentPage) : null;
+          if (grp) { navigate(grp.id); return; }      // Settings → My Account: back goes to the Settings list
           const home = STATE.user.role === 'superadmin' ? 'admin' : 'dashboard';
           if (STATE.currentPage && STATE.currentPage !== home) { navigate(home); return; }
         }
