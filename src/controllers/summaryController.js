@@ -14,7 +14,7 @@ const { company, billNo, cleanReason } = require('./registersController');
 const { payInfo } = require('./accountController');
 
 const MODE = { cash: 'Cash', upi: 'UPI', card: 'Card', bank_transfer: 'Bank transfer' };
-const CAT = { rent: 'Room rent', addon: 'Items', damage: 'Damages', other: 'Other charges', food: 'Food', electricity: 'Electricity' };
+const CAT = { rent: 'Room rent', addon: 'Items', damage: 'Damages', other: 'Other charges', food: 'Food', electricity: 'Electricity', other_income: 'Other income (not from guests)' };
 const PLAN = { daily: 'day', weekly: 'week', monthly: 'month' };
 
 function fmtD(d) {
@@ -108,14 +108,17 @@ function monthly(req, res) {
   const upto = to < today ? to : today;           // occupancy only counts days that have happened
 
   const one = (sql, ...a) => db.prepare(sql).get(...a);
-  const received = db.prepare(`SELECT COALESCE(category,'rent') head, SUM(amount_paise) amount FROM ledger_entries
-    WHERE property_id = ? AND kind = 'PAYMENT' AND biz_date BETWEEN ? AND ? GROUP BY head HAVING amount <> 0`).all(pid, from, to);
+  // Money received: guest payments by head, plus income not from a guest (Accounts → Record money).
+  const received = db.prepare(`SELECT CASE WHEN kind = 'OTHER_INCOME' THEN 'other_income' ELSE COALESCE(category,'rent') END head,
+      SUM(amount_paise) amount FROM ledger_entries
+    WHERE property_id = ? AND kind IN ('PAYMENT','OTHER_INCOME') AND biz_date BETWEEN ? AND ? GROUP BY head HAVING amount <> 0`).all(pid, from, to);
   const creditRefunds = one(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind = 'CREDIT_REFUND'
     AND biz_date BETWEEN ? AND ?`, pid, from, to).t;
   const billed = db.prepare(`SELECT category head, SUM(amount_paise) amount, SUM(COALESCE(tax_paise,0)) gst FROM ledger_entries
     WHERE property_id = ? AND kind = 'CHARGE' AND biz_date BETWEEN ? AND ? GROUP BY category HAVING amount <> 0`).all(pid, from, to);
-  const expenses = db.prepare(`SELECT category head, SUM(amount_paise) amount FROM ledger_entries
-    WHERE property_id = ? AND kind = 'EXPENSE' AND ref_date BETWEEN ? AND ? GROUP BY category HAVING amount <> 0 ORDER BY amount DESC`).all(pid, from, to);
+  // Money out: expenses, staff salaries and purchases.
+  const expenses = db.prepare(`SELECT CASE WHEN kind = 'SALARY' THEN 'Staff salaries' WHEN kind = 'PURCHASE' THEN 'Purchases: ' || COALESCE(category,'Other') ELSE category END head, SUM(amount_paise) amount FROM ledger_entries
+    WHERE property_id = ? AND kind IN ('EXPENSE','SALARY','PURCHASE') AND ref_date BETWEEN ? AND ? GROUP BY head HAVING amount <> 0 ORDER BY amount DESC`).all(pid, from, to);
   const discount = one(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind = 'WAIVER'
     AND biz_date BETWEEN ? AND ?`, pid, from, to).t;
   const depIn = one(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind = 'DEPOSIT_IN'
@@ -150,9 +153,9 @@ function monthly(req, res) {
   let m = month;
   for (let i = 0; i < 6; i++) {
     const f = `${m}-01`, t = addDays(`${nextMonth(m)}-01`, -1);
-    const inc = one(`SELECT COALESCE(SUM(CASE WHEN kind='PAYMENT' THEN amount_paise WHEN kind='CREDIT_REFUND' THEN -amount_paise END),0) t
-      FROM ledger_entries WHERE property_id = ? AND kind IN ('PAYMENT','CREDIT_REFUND') AND biz_date BETWEEN ? AND ?`, pid, f, t).t;
-    const exp = one(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind = 'EXPENSE'
+    const inc = one(`SELECT COALESCE(SUM(CASE WHEN kind IN ('PAYMENT','OTHER_INCOME') THEN amount_paise WHEN kind='CREDIT_REFUND' THEN -amount_paise END),0) t
+      FROM ledger_entries WHERE property_id = ? AND kind IN ('PAYMENT','OTHER_INCOME','CREDIT_REFUND') AND biz_date BETWEEN ? AND ?`, pid, f, t).t;
+    const exp = one(`SELECT COALESCE(SUM(amount_paise),0) t FROM ledger_entries WHERE property_id = ? AND kind IN ('EXPENSE','SALARY','PURCHASE')
       AND ref_date BETWEEN ? AND ?`, pid, f, t).t;
     trend.unshift({ month: m, income: inc, expenses: exp, profit: inc - exp });
     const [y, mm] = m.split('-').map(Number);
