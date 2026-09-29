@@ -12,11 +12,11 @@ const sms = require('../services/smsService');
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 const DUMMY_HASH    = '$2a$12$eLr2FWz7m3VbmJBbCzKQWOaOEDtB7lGS6cLUvp5Kx3kH1AHdmq0W6';
 
-// Wrong tries before a 15-minute lock; after MPIN_WIPE_AT wrong tries in a row the MPIN
-// stops working and the owner must give a new login code.
-const LOCK_AFTER   = 5;
-const LOCK_MINUTES = 15;
-const MPIN_WIPE_AT = 10;
+// Wrong password / MPIN: exponential back-off per account (numbers in src/middleware/rateLimits.js,
+// all configurable). After MPIN_WIPE_AT wrong tries in a row the MPIN stops working and the
+// owner must give a new login code.
+const { CFG: RL, backoffSeconds, waitText } = require('../middleware/rateLimits');
+const MPIN_WIPE_AT = RL.mpinWipeAt;
 const OTP_MAX_TRIES = 5;
 
 // Same secret for signing and verifying (previously login signed with a dev
@@ -57,18 +57,28 @@ function accountBlock(db, user) {
 }
 
 const str = (v) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-const minutesLeft = (iso) => Math.max(1, Math.ceil((Date.parse(iso) - Date.now()) / 60000));
 
-/** Record a wrong password / MPIN. Locks for 15 minutes every 5 misses; wipes the MPIN at 10. */
+/** Record a wrong password / MPIN. Wait grows 30 s, 1 min, 2 min… (capped); wipes the MPIN at MPIN_WIPE_AT. */
 function recordFailure(db, user) {
   const n = (user.failed_logins || 0) + 1;
-  const lock = n % LOCK_AFTER === 0 ? new Date(Date.now() + LOCK_MINUTES * 60000).toISOString() : null;
+  const wait = backoffSeconds(n);
+  const lock = wait ? new Date(Date.now() + wait * 1000).toISOString() : null;
   db.prepare('UPDATE users SET failed_logins = ?, locked_until = COALESCE(?, locked_until) WHERE id = ?').run(n, lock, user.id);
   if (n >= MPIN_WIPE_AT && user.mpin_hash) {
     db.prepare('UPDATE users SET mpin_hash = NULL WHERE id = ?').run(user.id);
     console.warn(`[AUTH] MPIN switched off after ${n} wrong tries for user ${user.id}`);
   }
   return lock;
+}
+/** Is this user in a back-off wait right now? Returns the wait message or null. */
+function waitingMessage(user) {
+  if (user && user.locked_until && user.locked_until > new Date().toISOString()) {
+    return `Too many wrong tries. Try again in ${waitText(user.locked_until)}.`;
+  }
+  return null;
+}
+function clearFailures(db, user) {
+  if (user.failed_logins || user.locked_until) db.prepare('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?').run(user.id);
 }
 
 /** POST /api/v1/auth/login — email or mobile + password, or mobile + MPIN (4/6 digits). */
@@ -93,9 +103,8 @@ function login(req, res) {
   // been saved as typed, e.g. "Ravi@Gmail.com").
   const user = db.prepare('SELECT * FROM users WHERE (lower(email) = ? OR mobile = ?) AND is_active = 1').get(identifier, asMobile);
 
-  if (user && user.locked_until && user.locked_until > new Date().toISOString()) {
-    return res.status(429).json({ error: `Too many wrong tries. Try again in ${minutesLeft(user.locked_until)} minutes.` });
-  }
+  const waiting = waitingMessage(user);
+  if (waiting) return res.status(429).json({ error: waiting });
 
   // 4 or 6 digits = MPIN (passwords are at least 8 characters).
   const isMpin = !!(user && user.mpin_hash && /^(\d{4}|\d{6})$/.test(secret));
@@ -111,7 +120,7 @@ function login(req, res) {
   if (!user || !valid) {
     if (user) {
       const lock = recordFailure(db, user);
-      if (lock) return res.status(429).json({ error: `Too many wrong tries. Try again in ${LOCK_MINUTES} minutes.` });
+      if (lock) return res.status(429).json({ error: `Too many wrong tries. Try again in ${waitText(lock)}.` });
     }
     return res.status(401).json({ error: /^\d{4,6}$/.test(secret) ? 'Wrong mobile number or MPIN' : 'Invalid credentials' });
   }
@@ -119,9 +128,7 @@ function login(req, res) {
   const blocked = accountBlock(db, user);
   if (blocked) return res.status(403).json({ error: blocked });
 
-  if (user.failed_logins || user.locked_until) {
-    db.prepare('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?').run(user.id);
-  }
+  clearFailures(db, user);
   return res.json({ token: makeToken(user), user: publicUser(user) });
 }
 
@@ -287,9 +294,17 @@ function changePassword(req, res) {
   }
   const db   = getDb();
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!bcrypt.compareSync(current_password, user.password_hash)) {
+  if (!user) return res.status(401).json({ error: 'User not found or deactivated' });
+  const waiting = waitingMessage(user);
+  if (waiting) return res.status(429).json({ error: waiting });
+  let okPwd = false;
+  try { okPwd = !!user.password_hash && bcrypt.compareSync(current_password, user.password_hash); } catch (_) { okPwd = false; }
+  if (!okPwd) {
+    // Counts toward back-off, so a stolen session can't guess the password forever.
+    recordFailure(db, user);
     return res.status(400).json({ error: 'Current password is incorrect' });   // 400, not 401: a typo must not sign you out
   }
+  clearFailures(db, user);
   const now = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
   db.prepare("UPDATE users SET password_hash = ?, pwd_changed_at = ?, updated_at = datetime('now') WHERE id = ?")
     .run(bcrypt.hashSync(new_password, BCRYPT_ROUNDS), now, req.user.id);
@@ -311,5 +326,5 @@ function me(req, res) {
 
 module.exports = {
   login, register, forgotPassword, resetPassword, changePassword, me,
-  makeToken, publicUser, accountBlock,
+  makeToken, publicUser, accountBlock, recordFailure, waitingMessage, clearFailures,
 };
