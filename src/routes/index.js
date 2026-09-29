@@ -30,6 +30,11 @@ const purchases  = require('../controllers/purchasesController');
 const { can }    = require('../middleware/permissions');
 const { safeEqual } = require('../util/security');
 
+// Every request: strict shape checks, and exact schemas for the sign-in routes.
+const { validateRequest, checkParam } = require('../middleware/validate');
+router.use(validateRequest);
+for (const p of ['id', 'docId', 'receipt_number', 'type']) router.param(p, checkParam);
+
 // Async handlers: send any error to the error handler instead of leaving the request hanging.
 const aw = (fn) => (req, res, next) => { try { Promise.resolve(fn(req, res, next)).catch(next); } catch (e) { next(e); } };
 
@@ -112,7 +117,7 @@ router.get   ('/reports/summary',    authenticate, sameProperty, can('reports_fi
 router.get   ('/reports/registers',  authenticate, sameProperty, registers.listRegisters);
 router.get   ('/reports/registers/:type', authenticate, sameProperty, registers.getRegister);
 router.get   ('/reports/monthly',    authenticate, sameProperty, can('reports_finance'), summary.monthly);
-router.get   ('/reports/export',     authenticate, sameProperty, can('reports_finance'), finance.reportExport);
+router.get   ('/reports/export',     authenticate, sameProperty, can('reports_finance'), aw(finance.reportExport));
 router.get   ('/audit',              authenticate, sameProperty, can('audit'), finance.getAuditLog);
 
 // ── My Account: how guests pay (UPI QR + bank) ───────────
@@ -196,7 +201,7 @@ router.patch('/feedback/:id/resolve', authenticate, sameProperty, can('approvals
 // ── Receipts ──────────────────────────────────────────────
 router.get ('/receipts/:receipt_number',         authenticate, sameProperty, receipts.getReceipt);
 router.post('/receipts/:receipt_number/resend',  authenticate, sameProperty, can('payments'), receipts.resendReceipt);
-router.get ('/receipts/:receipt_number/pdf',     authenticate, sameProperty, receipts.downloadReceiptPdf);
+router.get ('/receipts/:receipt_number/pdf',     authenticate, sameProperty, aw(receipts.downloadReceiptPdf));
 
 // ── Cron endpoints ────────────────────────────────────────
 router.post('/cron/release-expired-bookings', verifyCronSecret, bookings.releaseExpired);
