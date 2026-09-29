@@ -199,18 +199,21 @@ function cashBook(req, res) {
   const d = dateParam(req, res); if (!d) return;
   const entries = db.prepare(`
     SELECT e.id, e.created_at, e.kind, e.category, e.mode, e.amount_paise, e.reason, e.reversal_of,
-           e.resident_id, r.full_name resident, u.name recorded_by,
+           e.resident_id, COALESCE(r.full_name, ps.name) resident, u.name recorded_by,
            EXISTS (SELECT 1 FROM ledger_entries x WHERE x.reversal_of = e.id) is_reversed
     FROM ledger_entries e
     LEFT JOIN residents r ON r.id = e.resident_id
+    LEFT JOIN payroll_staff ps ON e.kind = 'SALARY' AND ps.id = e.source_id
     LEFT JOIN users u ON u.id = e.user_id
-    WHERE e.property_id = ? AND e.biz_date = ? AND e.kind IN ('PAYMENT','DEPOSIT_IN','DEPOSIT_REFUND','CREDIT_REFUND','EXPENSE','BANK_DEPOSIT')
+    WHERE e.property_id = ? AND e.biz_date = ? AND e.kind IN ('PAYMENT','DEPOSIT_IN','DEPOSIT_REFUND','CREDIT_REFUND','EXPENSE','BANK_DEPOSIT',
+      'OWNER_IN','OWNER_OUT','OTHER_INCOME','BANK_WITHDRAW','SALARY','PURCHASE')
     ORDER BY e.created_at, e.rowid`).all(pid, d);
   const byMode = {};
   for (const e of entries) {
     const m = e.mode || 'cash';
     byMode[m] = byMode[m] || { in_paise: 0, out_paise: 0 };
-    if (e.kind === 'PAYMENT' || e.kind === 'DEPOSIT_IN') byMode[m].in_paise += e.amount_paise;
+    // Money coming in: guest payments/deposits, owner money in, other income, cash taken out of the bank.
+    if (['PAYMENT', 'DEPOSIT_IN', 'OWNER_IN', 'OTHER_INCOME', 'BANK_WITHDRAW'].includes(e.kind)) byMode[m].in_paise += e.amount_paise;
     else byMode[m].out_paise += e.amount_paise;
   }
   const byStaff = db.prepare(`SELECT COALESCE(u.name,'—') staff, e.mode, SUM(e.amount_paise) collected_paise
@@ -303,7 +306,8 @@ function reverseEntry(req, res) {
   if (!reason) return res.status(400).json({ error: 'reason is required' });
   const entry = getDb().prepare('SELECT * FROM ledger_entries WHERE id = ? AND property_id = ?').get(req.params.id, pid);
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
-  if (entry.source_table) {
+  // Salary payments and purchases are undone here (their bill / staff record stays as history).
+  if (entry.source_table && !['payroll_staff', 'purchases'].includes(entry.source_table)) {
     // Entries created from a payment/expense must be undone from that screen, so both records stay in step.
     return res.status(409).json({ error: `This entry belongs to a ${entry.source_table.replace('_', ' ')} record — correct it there` });
   }
