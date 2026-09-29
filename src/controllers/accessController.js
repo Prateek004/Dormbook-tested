@@ -120,9 +120,13 @@ function changeMpin(req, res) {
   const db = getDb();
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
   if (!user || !user.mpin_hash) return res.status(400).json({ error: 'You sign in with a password, not an MPIN' });
+  const { recordFailure, waitingMessage, clearFailures } = require('./authController');
+  const waiting = waitingMessage(user);
+  if (waiting) return res.status(429).json({ error: waiting });
   let ok = false;
   try { ok = bcrypt.compareSync(str(b.current_mpin), user.mpin_hash); } catch (_) { ok = false; }
-  if (!ok) return res.status(400).json({ error: 'Current MPIN is wrong' });   // 400, not 401: a typo must not sign you out
+  if (!ok) { recordFailure(db, user); return res.status(400).json({ error: 'Current MPIN is wrong' }); }   // 400, not 401: a typo must not sign you out
+  clearFailures(db, user);
   const problem = mpinProblem(str(b.new_mpin), user.mobile);
   if (problem) return res.status(400).json({ error: problem });
   const now = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
