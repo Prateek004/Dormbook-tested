@@ -6,7 +6,10 @@ const { getDb } = require('../db/connection');
 function getJwtSecret() {
   const s = process.env.JWT_SECRET;
   if (!s || s.startsWith('CHANGE_ME')) {
-    if (process.env.NODE_ENV === 'production') {
+    // The test-only secret below must never sign real logins: refuse it on any real server.
+    const deployed = process.env.NODE_ENV === 'production'
+      || !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+    if (deployed) {
       throw new Error('JWT_SECRET is not configured');
     }
     return 'change_this_secret_dev_only_32chars!';
